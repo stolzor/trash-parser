@@ -69,6 +69,13 @@ impl Domain {
             Domain::Long
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Domain::Short => "short",
+            Domain::Long => "long",
+        }
+    }
 }
 
 // --- Stage 0: discovery -----------------------------------------------------

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS videos (
     source        TEXT,
     query         TEXT,
     channel_id    TEXT,                             -- заполняется после harvest (для expand)
+    domain        TEXT,                             -- short|long, из duration (для квот)
     status_meta   TEXT NOT NULL DEFAULT 'pending',  -- pending|ok|failed|filtered
     status_media  TEXT NOT NULL DEFAULT 'pending',  -- pending|ok|failed|skipped
     retries_meta  INTEGER NOT NULL DEFAULT 0,
@@ -80,8 +81,9 @@ impl Manifest {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path).map_err(map_err)?;
         conn.execute_batch(SCHEMA).map_err(map_err)?;
-        // миграция старых БД: добавить channel_id, если его нет (ошибку дубля глотаем)
+        // миграция старых БД: добавить колонки, если их нет (ошибку дубля глотаем)
         let _ = conn.execute("ALTER TABLE videos ADD COLUMN channel_id TEXT", []);
+        let _ = conn.execute("ALTER TABLE videos ADD COLUMN domain TEXT", []);
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -121,22 +123,28 @@ impl Manifest {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn mark_meta(
         &self,
         v: &VideoId,
         status: Status,
         meta_path: Option<&str>,
         channel_id: Option<&str>,
+        domain: Option<&str>,
         err: Option<&str>,
         now: i64,
     ) -> Result<()> {
         self.lock()
             .execute(
                 "UPDATE videos SET status_meta=?3, meta_path=COALESCE(?4, meta_path),
-                    channel_id=COALESCE(?7, channel_id), last_error=?5, updated_at=?6,
+                    channel_id=COALESCE(?7, channel_id), domain=COALESCE(?8, domain),
+                    last_error=?5, updated_at=?6,
                     retries_meta = retries_meta + (CASE WHEN ?3='failed' THEN 1 ELSE 0 END)
                  WHERE platform=?1 AND id=?2",
-                params![v.platform.as_str(), v.id, status.as_str(), meta_path, err, now, channel_id],
+                params![
+                    v.platform.as_str(), v.id, status.as_str(),
+                    meta_path, err, now, channel_id, domain
+                ],
             )
             .map_err(map_err)?;
         Ok(())
@@ -222,16 +230,17 @@ impl Manifest {
     }
 
     /// id, готовые к скачиванию медиа: метаданные ok, медиа ещё нет.
+    /// Возвращает `(id, url, domain)` — домен нужен для квот.
     pub fn pending_media(
         &self,
         platform: Platform,
         max_retries: u32,
         limit: usize,
-    ) -> Result<Vec<(VideoId, String)>> {
+    ) -> Result<Vec<(VideoId, String, Option<String>)>> {
         let conn = self.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT id, url FROM videos
+                "SELECT id, url, domain FROM videos
                  WHERE platform=?1 AND status_meta='ok'
                    AND (status_media='pending'
                         OR (status_media='failed' AND retries_media < ?2))
@@ -240,8 +249,27 @@ impl Manifest {
             .map_err(map_err)?;
         let rows = stmt
             .query_map(params![platform.as_str(), max_retries, limit as i64], |r| {
-                Ok((VideoId::new(platform, r.get::<_, String>(0)?), r.get::<_, String>(1)?))
+                Ok((
+                    VideoId::new(platform, r.get::<_, String>(0)?),
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
             })
+            .map_err(map_err)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(map_err)
+    }
+
+    /// Сколько медиа уже успешно скачано по каждому домену (для засева квот).
+    pub fn media_ok_by_domain(&self) -> Result<Vec<(String, i64)>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT COALESCE(domain, 'unknown'), COUNT(*) FROM videos
+                 WHERE status_media='ok' GROUP BY domain",
+            )
+            .map_err(map_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
             .map_err(map_err)?;
         rows.collect::<std::result::Result<_, _>>().map_err(map_err)
     }
@@ -312,8 +340,8 @@ mod tests {
         }
         let v1 = VideoId::new(Platform::Youtube, "v1");
         let v2 = VideoId::new(Platform::Youtube, "v2");
-        m.mark_meta(&v1, Status::Ok, Some("p1"), Some("UC_channelA"), None, 1).unwrap();
-        m.mark_meta(&v2, Status::Ok, Some("p2"), Some("UC_channelA"), None, 1).unwrap();
+        m.mark_meta(&v1, Status::Ok, Some("p1"), Some("UC_channelA"), Some("long"), None, 1).unwrap();
+        m.mark_meta(&v2, Status::Ok, Some("p2"), Some("UC_channelA"), Some("short"), None, 1).unwrap();
 
         // ровно один уникальный нерасширённый канал
         assert_eq!(
@@ -339,5 +367,32 @@ mod tests {
         assert!(m.upsert_candidate(&candidate("v1", "query:x")).unwrap());
         // метаданных ещё нет → channel_id неизвестен → расширять нечего
         assert!(m.unexpanded_channels(Platform::Youtube, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn media_quota_counts_and_domain_passthrough() {
+        let m = Manifest::open(":memory:").unwrap();
+        for id in ["s1", "l1", "l2"] {
+            assert!(m.upsert_candidate(&candidate(id, "query:x")).unwrap());
+        }
+        let s1 = VideoId::new(Platform::Youtube, "s1");
+        let l1 = VideoId::new(Platform::Youtube, "l1");
+        let l2 = VideoId::new(Platform::Youtube, "l2");
+        m.mark_meta(&s1, Status::Ok, Some("p"), None, Some("short"), None, 1).unwrap();
+        m.mark_meta(&l1, Status::Ok, Some("p"), None, Some("long"), None, 1).unwrap();
+        m.mark_meta(&l2, Status::Ok, Some("p"), None, Some("long"), None, 1).unwrap();
+
+        // pending_media отдаёт домен — по нему квота решает скачивать или нет
+        let pending = m.pending_media(Platform::Youtube, 2, 10).unwrap();
+        assert_eq!(pending.len(), 3);
+        assert!(pending.iter().all(|(_, _, d)| d.is_some()));
+
+        // засев квоты считает уже скачанное по доменам
+        m.mark_media(&s1, Status::Ok, Some("s1.mp4"), None, 2).unwrap();
+        m.mark_media(&l1, Status::Ok, Some("l1.mp4"), None, 2).unwrap();
+        let counts: std::collections::HashMap<_, _> =
+            m.media_ok_by_domain().unwrap().into_iter().collect();
+        assert_eq!(counts.get("short"), Some(&1));
+        assert_eq!(counts.get("long"), Some(&1));
     }
 }

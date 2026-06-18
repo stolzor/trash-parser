@@ -13,7 +13,9 @@ use detox_parser_store::FsStore;
 use detox_parser_ytdlp::{now_unix, CookieOpts, YtDlp};
 use futures::stream::{self, StreamExt};
 use governor::{Quota, RateLimiter};
+use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -153,12 +155,12 @@ impl Pipeline {
                             }
                             // недоступное видео — терминально, исключаем из выборки
                             Err(Error::Unavailable(msg)) => {
-                                let _ = manifest.mark_meta(&video, Status::Filtered, None, None, Some(&msg), now_unix());
+                                let _ = manifest.mark_meta(&video, Status::Filtered, None, None, None, Some(&msg), now_unix());
                                 let _ = manifest.mark_media(&video, Status::Skipped, None, None, now_unix());
                             }
                             Err(e) => {
                                 warn!(%video, error = %e, "meta failed");
-                                let _ = manifest.mark_meta(&video, Status::Failed, None, None, Some(&e.to_string()), now_unix());
+                                let _ = manifest.mark_meta(&video, Status::Failed, None, None, None, Some(&e.to_string()), now_unix());
                             }
                         }
                     }
@@ -178,6 +180,21 @@ impl Pipeline {
         }
         let opts = self.cfg.media.to_opts();
         let media_dir = self.store.media_dir();
+        let quota = self.cfg.quota.clone();
+
+        // Счётчики скачанного по доменам — засеваем уже загруженным (резюм-safe),
+        // дальше резервируем слоты атомарно, чтобы воркеры не перебрали квоту.
+        let mut seed: HashMap<String, usize> = HashMap::new();
+        for (d, n) in self.manifest.media_ok_by_domain()? {
+            seed.insert(d, n as usize);
+        }
+        let counters: Arc<HashMap<String, AtomicUsize>> = Arc::new(
+            ["short", "long"]
+                .iter()
+                .map(|d| (d.to_string(), AtomicUsize::new(*seed.get(*d).unwrap_or(&0))))
+                .collect(),
+        );
+
         for (platform, backend) in &self.backends {
             let pending =
                 self.manifest.pending_media(*platform, self.max_retries, 100_000)?;
@@ -188,15 +205,34 @@ impl Pipeline {
 
             let workers = self.cfg.concurrency.media_workers.max(1);
             stream::iter(pending)
-                .for_each_concurrent(workers, |(video, url)| {
+                .for_each_concurrent(workers, |(video, url, domain)| {
                     let media = backend.media.clone();
                     let limiter = backend.limiter.clone();
                     let manifest = self.manifest.clone();
                     let store = self.store.clone();
                     let opts = opts.clone();
                     let media_dir = media_dir.clone();
+                    let counters = counters.clone();
+                    let quota = quota.clone();
                     let max_retries = self.max_retries;
                     async move {
+                        // --- квота: резервируем слот домена до скачивания ---
+                        let reserved = match domain.as_deref() {
+                            Some(d) => match (quota.for_domain(d), counters.get(d)) {
+                                (Some(limit), Some(counter)) => {
+                                    if counter.fetch_add(1, Ordering::SeqCst) >= limit {
+                                        counter.fetch_sub(1, Ordering::SeqCst); // откат
+                                        let _ = manifest.mark_media(
+                                            &video, Status::Skipped, None, Some("quota"), now_unix());
+                                        return;
+                                    }
+                                    counters.get(d) // слот занят, освободим при провале
+                                }
+                                _ => None,
+                            },
+                            None => None,
+                        };
+
                         limiter.until_ready().await;
                         match retry(max_retries, || media.fetch(&video, &url, &opts)).await {
                             Ok(art) => {
@@ -204,10 +240,12 @@ impl Pipeline {
                                 let _ = manifest.mark_media(&video, Status::Ok, Some(&art.path), None, now_unix());
                             }
                             Err(Error::Unavailable(msg)) => {
+                                if let Some(c) = reserved { c.fetch_sub(1, Ordering::SeqCst); }
                                 cleanup_partial(&media_dir, &video.id).await;
                                 let _ = manifest.mark_media(&video, Status::Skipped, None, Some(&msg), now_unix());
                             }
                             Err(e) => {
+                                if let Some(c) = reserved { c.fetch_sub(1, Ordering::SeqCst); }
                                 warn!(%video, error = %e, "media failed");
                                 cleanup_partial(&media_dir, &video.id).await;
                                 let _ = manifest.mark_media(&video, Status::Failed, None, Some(&e.to_string()), now_unix());
@@ -327,11 +365,13 @@ async fn persist_meta(
 
     let now = now_unix();
     let channel_id = extract.normalized.channel.id.clone();
+    let domain = extract.normalized.domain.map(|d| d.as_str());
     manifest.mark_meta(
         &extract.video,
         Status::Ok,
         Some(&raw_ref.path),
         channel_id.as_deref(),
+        domain,
         None,
         now,
     )?;

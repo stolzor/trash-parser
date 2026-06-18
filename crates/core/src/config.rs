@@ -18,6 +18,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub discovery: DiscoveryConfig,
 
+    /// Квоты медиа по доменам (балансировка выборки short/long).
+    #[serde(default)]
+    pub quota: QuotaConfig,
+
     /// Настройки бэкенда yt-dlp (куки против бот-гейтинга YouTube).
     #[serde(default)]
     pub ytdlp: YtDlpConfig,
@@ -25,6 +29,26 @@ pub struct AppConfig {
     /// Источники сбора (Stage 0).
     #[serde(default)]
     pub seeds: Vec<Seed>,
+}
+
+/// Квоты на скачивание медиа по доменам. `None` = без ограничения.
+/// Гейтит дорогую медиа-ветку, чтобы обучающий набор был сбалансирован.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QuotaConfig {
+    pub short: Option<usize>,
+    pub long: Option<usize>,
+}
+
+impl QuotaConfig {
+    /// Квота для домена по его строковому имени ("short"/"long").
+    pub fn for_domain(&self, domain: &str) -> Option<usize> {
+        match domain {
+            "short" => self.short,
+            "long" => self.long,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
