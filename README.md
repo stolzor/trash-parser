@@ -76,8 +76,15 @@ discovery/<run_id>.jsonl      # провенанс discovery
 
 ## Статус / дальнейшее
 
-- v0 discovery идёт через `yt-dlp --flat-playlist` (надёжно, работает сразу).
-  Нативный InnerTube-клиент на `reqwest` можно добавить как альтернативную
-  реализацию трейта `Discoverer`, не трогая pipeline.
-- TODO: многохоповое расширение (`discovery.max_hops`), квоты по доменам,
-  скачивание окон для длинных видео, экспорт в parquet.
+Готово: нативный YouTube InnerTube discovery, многохоп (`discovery.max_hops`),
+квоты по доменам, экспорт в parquet.
+
+- **YouTube discovery** — нативный InnerTube (`reqwest`) для query/channel,
+  с автоматическим fallback на `yt-dlp` (hashtag/trending — сразу yt-dlp).
+- **TikTok discovery** — best-effort: GET страницы тега/юзера → встроенный
+  `__UNIVERSAL_DATA_FOR_REHYDRATION__` JSON (без подписи запросов), с fallback
+  на `yt-dlp`. TikTok жёстко бот-гейтит: нативный путь возвращает items только
+  когда страница их SSR-ит; для надёжности в проде нужен residential-IP /
+  `msToken`-cookie, либо рабочий yt-dlp app-info. Логика парсинга покрыта тестами.
+- TODO: скачивание только нужных окон для длинных видео; партиционированный
+  parquet + S3 `Sink`; подписанный TikTok XHR для пагинации.

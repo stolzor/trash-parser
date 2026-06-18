@@ -731,6 +731,8 @@ dependencies = [
  "async-trait",
  "detox-parser-core",
  "detox-parser-ytdlp",
+ "reqwest",
+ "serde_json",
  "tracing",
 ]
 
