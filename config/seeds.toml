@@ -1,20 +1,22 @@
-# Конфиг сбора. out_root по умолчанию = вход ml (Bronze падает прямо в пайплайн).
-out_root = "../ml/data"
+# Конфиг сбора. Хранение отделено от ml: данные идут в S3/MinIO (см. [storage]),
+# а не в каталог ml. out_root — только нейтральный локальный путь под staging/FS-режим.
+out_root = "./data"
 
 [manifest]
 # Состояние сбора (статусы стадий) в PostgreSQL. Можно переопределить env DATABASE_URL.
 url = "postgres://postgres:postgres@127.0.0.1:5432/detox"
 
 [storage]
-backend = "fs"             # "fs" — локальная ФС; "s3" — объектное хранилище
-# Для backend = "s3" (S3 / MinIO / R2). Креды — из env (AWS_ACCESS_KEY_ID/SECRET).
-# [storage.s3]
-# bucket = "detox"
-# region = "us-east-1"
-# endpoint = "http://127.0.0.1:9000"   # MinIO/R2; убрать для AWS
-# prefix = "bronze"
-# path_style = true                     # обязательно для MinIO
-# staging_dir = "./.staging"            # локальный буфер медиа до загрузки
+backend = "s3"             # данные → объектное хранилище (отдельно от ml). "fs" — локально.
+
+[storage.s3]
+bucket = "detox-bronze"
+region = "us-east-1"
+endpoint = "http://127.0.0.1:9000"   # MinIO/R2; убрать (закомментировать) для AWS S3
+prefix = "bronze"
+path_style = true                     # обязательно для MinIO
+staging_dir = "./.staging"            # локальный временный буфер медиа до загрузки
+# Креды — только из env: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
 
 [concurrency]
 meta_workers = 4        # параллельных задач метаданных на платформу (внутри процесса)

@@ -43,8 +43,9 @@ Stage 1b (Media)** medallion-пайплайна `ml`, переписанные �
 | формат: `fps`, `width`, `height`, aspect, `vcodec`, `tbr` | дешёвые format-фичи (etl.md, A0) |
 
 Так как метаданные берём через `yt-dlp -J`, **сырой JSON уже в формате, который
-`ml` ждёт**. Пишем его в `ml/data/raw/meta/` — Python-пайплайн не меняется.
-Нормализованную common-schema и манифест пишем рядом (это «наше», `ml` их игнор.).
+`ml` ждёт** в `raw/meta/<id>.json`. Хранение отделено от `ml`: пишем в S3/MinIO
+(или нейтральный `out_root` в FS-режиме), `ml` читает оттуда. Нормализованную
+common-schema пишем рядом (это «наше»), статусы — в Postgres.
 
 ### TikTok → общий контракт (маппинг)
 
@@ -185,17 +186,23 @@ Postgres — только под статусы (данные — JSON/меди�
 - Rate-limit per host (`governor`), экспоненциальный backoff на 429/5xx (`backoff`).
 - Грейсфул-резюм: pipeline читает манифест и берёт только `pending`/`failed`.
 
-## Раскладка на диске (out_root настраивается; дефолт = `ml/data`)
+## Раскладка данных (хранение отделено от ml)
+
+Одинаковая раскладка ключей в S3 (дефолт) и на ФС:
 
 ```
-<out_root>/
-  raw/meta/<id>.json            # СЫРОЙ yt-dlp -J — формат ml, immutable
-  raw/videos/<id>.mp4           # медиа (capped low-res)
-  normalized/<platform>/<id>.json  # наша common-schema (extra)
-  discovery/<run_id>.jsonl      # провенанс discovery
+raw/meta/<id>.json               # СЫРОЙ yt-dlp -J — формат ml, immutable
+raw/videos/<id>.mp4              # медиа (capped); для длинных — <id>.win_<start>.mp4
+normalized/<platform>/<id>.json  # наша common-schema (extra)
 ```
 
-Дефолт `out_root` → `../ml/data`, чтобы Bronze падал прямо во вход `ml`.
+- **S3-режим (дефолт):** ключи под `s3://<bucket>/<prefix>/…`; медиа yt-dlp пишет
+  в локальный `staging_dir`, затем грузится в бакет и локальная копия удаляется.
+  Рядом с `ml` ничего не пишется — хранение полностью отделено.
+- **FS-режим:** те же пути под `out_root` (нейтральный локальный путь, не `ml`).
+- `discovery/<run_id>.jsonl` — провенанс, локально в `staging_dir`.
+
+`ml` читает Bronze из бакета/пути (формат `raw/meta` не меняется).
 
 ## Нормализованная схема (`NormalizedVideo`)
 

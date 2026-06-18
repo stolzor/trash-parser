@@ -18,6 +18,15 @@
     postgres:16-alpine
   ```
   DSN задаётся в `[manifest] url` или через env `DATABASE_URL`.
+- **Объектное хранилище** (по умолчанию `backend="s3"`) — S3 / R2 или локально MinIO:
+  ```bash
+  docker run -d --name detox-minio -p 9000:9000 \
+    -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+    minio/minio server /data
+  # создать бакет (mc) и задать креды в env:
+  export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin
+  ```
+  Параметры — в `[storage.s3]`. Для чисто локального запуска без S3: `backend="fs"`.
 
 ## Сборка
 
@@ -27,8 +36,10 @@ cargo build --release
 
 ## Использование
 
-Источники описываются в `config/seeds.toml` (по умолчанию `out_root = ../ml/data`,
-то есть Bronze падает прямо во вход ml).
+Источники описываются в `config/seeds.toml`. По умолчанию хранение **отделено от
+ml**: данные (raw/normalized/видео) идут в **S3/MinIO** (`[storage] backend="s3"`),
+статусы — в PostgreSQL. `ml` затем читает данные из бакета (или из FS, если
+`backend="fs"`). `out_root` — только нейтральный локальный путь под staging.
 
 ```bash
 detox-parser discover     # Stage 0: найти кандидатов по seeds → манифест
@@ -48,19 +59,24 @@ detox-parser single youtube "https://youtube.com/watch?v=..."   # разовый
 одним `[manifest] url` — они делят очередь через атомарный захват
 (`FOR UPDATE SKIP LOCKED`), не пересекаясь. Размер батча — `concurrency.claim_batch`.
 
-## Раскладка вывода (`out_root`)
+## Раскладка данных
+
+Одинаковая раскладка ключей в S3 (по умолчанию) и на ФС (`backend="fs"`):
 
 ```
-raw/meta/<id>.json            # сырой yt-dlp -J — формат, который читает ml
-raw/videos/<id>.mp4           # медиа (capped)
+raw/meta/<id>.json               # сырой yt-dlp -J (всё, формат, который читает ml)
+raw/videos/<id>.mp4              # медиа (capped); для длинных — <id>.win_<start>.mp4
 normalized/<platform>/<id>.json  # кросс-платформенная common-schema
-discovery/<run_id>.jsonl      # провенанс discovery
 ```
+- **S3-режим:** ключи под `s3://<bucket>/<prefix>/…`; видео сначала во временный
+  `staging_dir`, затем грузится в бакет и локальная копия удаляется. На диск рядом
+  с `ml` ничего не пишется.
+- **FS-режим:** те же пути под `out_root`.
+- **Статусы стадий** (резюмируемость) — в **PostgreSQL** (`[manifest]`), не на диске.
+- **discovery-лог** провенанса — локально в `staging_dir/discovery/<run_id>.jsonl`.
 
-Статусы стадий (резюмируемость) живут не на диске, а в **PostgreSQL** (`[manifest]`).
-
-Раз метаданные берутся через `yt-dlp -J`, `raw/meta/<id>.json` уже в формате,
-который `ml` ждёт на Silver-стадии — интеграция без изменений в Python.
+Метаданные берутся через `yt-dlp -J`, поэтому `raw/meta/<id>.json` уже в формате,
+который `ml` ждёт на Silver-стадии — `ml` просто указываешь на бакет/путь.
 
 ## Крейты
 
@@ -80,8 +96,9 @@ discovery/<run_id>.jsonl      # провенанс discovery
 
 ## Хранение и масштабирование
 
-- **Сейчас (MVP):** parquet + JSON + медиа на локальном диске; запросы — **DuckDB**
-  (`SELECT * FROM 'export/normalized.parquet'`), как и в `ml` (Polars/DuckDB).
+- **По умолчанию:** данные (raw/normalized/медиа) в **S3/MinIO** — отдельно от `ml`;
+  запросы — **DuckDB** прямо из бакета. Для локальной разработки `backend="fs"` →
+  всё под `out_root` (тоже вне `ml`).
 - **Шеринг/масштаб:** `backend = "s3"` в `[storage]` → Bronze (raw/normalized/
   медиа) пишется в **S3 / MinIO / R2** с той же раскладкой ключей, что на ФС;
   DuckDB/Polars читают из S3 напрямую (data lake). Креды — из env. Медиа сначала

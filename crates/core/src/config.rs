@@ -160,7 +160,8 @@ pub struct YtDlpConfig {
 }
 
 fn default_out_root() -> String {
-    "../ml/data".into()
+    // нейтральный локальный путь (для FS-режима и staging); данные от ml отделены
+    "./data".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
