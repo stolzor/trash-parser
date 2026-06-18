@@ -44,6 +44,10 @@ detox-parser single youtube "https://youtube.com/watch?v=..."   # разовый
 
 Логи: `RUST_LOG=debug detox-parser ...`. Бинарь yt-dlp: `YTDLP_BIN=/path/to/yt-dlp`.
 
+**Распределённый сбор:** запусти несколько процессов `harvest`/`media`/`run` с
+одним `[manifest] url` — они делят очередь через атомарный захват
+(`FOR UPDATE SKIP LOCKED`), не пересекаясь. Размер батча — `concurrency.claim_batch`.
+
 ## Раскладка вывода (`out_root`)
 
 ```
@@ -66,6 +70,7 @@ discovery/<run_id>.jsonl      # провенанс discovery
 | `detox-parser-manifest`  | резюмируемое состояние в PostgreSQL (async sqlx) |
 | `detox-parser-store`     | Bronze-sink на ФС                               |
 | `detox-parser-store-s3`  | Bronze-sink в S3/MinIO/R2 (data lake)           |
+| `detox-parser-http`      | reqwest-клиент с ротацией прокси (пул + cooldown) |
 | `detox-parser-ytdlp`     | async-обёртка над yt-dlp + нормализация          |
 | `detox-parser-youtube`   | YouTube discovery                               |
 | `detox-parser-tiktok`    | TikTok discovery                                |
@@ -97,18 +102,35 @@ discovery/<run_id>.jsonl      # провенанс discovery
   cooldown на сбойных, общий для yt-dlp и нативных reqwest-клиентов. Нужен для
   стабильного TikTok (residential) и обхода IP-лимитов при масштабе.
 
-## Статус / дальнейшее
+## Статус
 
-Готово: нативный YouTube InnerTube discovery, многохоп (`discovery.max_hops`),
-квоты по доменам, экспорт в parquet.
+Все запланированные возможности реализованы; где это возможно без внешних
+кредов/прокси — проверены вживую (Docker Postgres/MinIO + реальная сеть).
 
-- **YouTube discovery** — нативный InnerTube (`reqwest`) для query/channel,
-  с автоматическим fallback на `yt-dlp` (hashtag/trending — сразу yt-dlp).
-- **TikTok discovery** — best-effort: GET страницы тега/юзера → встроенный
-  `__UNIVERSAL_DATA_FOR_REHYDRATION__` JSON (без подписи запросов), с fallback
-  на `yt-dlp`. TikTok жёстко бот-гейтит: нативный путь возвращает items только
-  когда страница их SSR-ит. Для надёжности задай `[tiktok] cookie`
-  (`msToken=…; ttwid=…`) или `cookie_file` (Netscape cookies.txt) — cookie
-  прикладывается заголовком к запросу — плюс residential-прокси. Покрыто тестами.
-- TODO: скачивание только нужных окон для длинных видео; партиционированный
-  parquet + S3 `Sink`; подписанный TikTok XHR для пагинации.
+| Возможность | Статус |
+|---|---|
+| YouTube discovery — нативный InnerTube (`reqwest`) для query/channel + fallback на `yt-dlp` (hashtag/trending) | ✅ live |
+| YouTube метаданные — контракт `ml` (9 полей) + полный raw `-J` + heatmap | ✅ live |
+| Скачивание медиа — capped low-res; для длинных видео оконно (`--download-sections`) | ✅ live |
+| TikTok discovery — SSR-парсинг (`__UNIVERSAL_DATA_FOR_REHYDRATION__`) + msToken/cookie + fallback | ⚙️ механизм готов, в тестах; live нужен residential-прокси + `msToken` |
+| Многохоп против survivorship bias (`discovery.max_hops`) | ✅ unit + live |
+| Квоты по доменам short/long | ✅ unit |
+| Прокси-пул из файла (round-robin + cooldown) — для yt-dlp и reqwest | ✅ end-to-end |
+| Distributed claim (`FOR UPDATE SKIP LOCKED`, батчи) | ✅ live, на реальных данных |
+| PostgreSQL-манифест (async sqlx) | ✅ live |
+| S3/MinIO/R2 sink | ✅ live (MinIO) |
+| Экспорт parquet, в т.ч. Hive-партиционированный | ✅ live (DuckDB) |
+
+13 тестов: unit + gated интеграционные (Postgres/MinIO в Docker + реальная сеть),
+последние тихо пропускаются без `PG_TEST_URL`/`S3_TEST_BUCKET`.
+
+### Единственное ограничение
+**Живой TikTok** требует residential-прокси + валидный `msToken`-cookie — без них
+и нативный SSR, и yt-dlp упираются в бот-стены TikTok. Это внешний фактор, не код:
+задай `[tiktok] cookie`/`cookie_file` + `[proxy] file` — нативный путь заработает
+без правок.
+
+### Опционально на будущее
+- Подписанный TikTok XHR для пагинации глубже первой страницы.
+- Lakehouse (Apache Iceberg / Delta Lake) поверх S3 при росте и нескольких писателях.
+- Observability (Prometheus-метрики сбора).
