@@ -1,6 +1,10 @@
 # Конфиг сбора. out_root по умолчанию = вход ml (Bronze падает прямо в пайплайн).
 out_root = "../ml/data"
 
+[manifest]
+# Состояние сбора (статусы стадий) в PostgreSQL. Можно переопределить env DATABASE_URL.
+url = "postgres://postgres:postgres@127.0.0.1:5432/detox"
+
 [storage]
 backend = "fs"             # "fs" — локальная ФС; "s3" — объектное хранилище
 # Для backend = "s3" (S3 / MinIO / R2). Креды — из env (AWS_ACCESS_KEY_ID/SECRET).

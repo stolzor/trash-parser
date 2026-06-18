@@ -7,5 +7,9 @@ authors.workspace = true
 
 [dependencies]
 detox-parser-core = { workspace = true }
-rusqlite = { workspace = true }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }

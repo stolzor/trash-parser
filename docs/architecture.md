@@ -77,7 +77,7 @@ parser/
   docs/architecture.md
   crates/
     core/      detox-parser-core      # типы, трейты, схема, config, ошибки — КОНТРАКТ
-    manifest/  detox-parser-manifest  # sqlite: резюмируемое состояние по стадиям
+    manifest/  detox-parser-manifest  # postgres (async sqlx): состояние по стадиям
     store/     detox-parser-store     # medallion-sink на ФС (bronze layout)
     ytdlp/     detox-parser-ytdlp     # async-обёртка над yt-dlp subprocess
     youtube/   detox-parser-youtube   # InnerTube discovery + extractor-адаптер
@@ -157,24 +157,27 @@ Discovered ─► MetaFetched ─► Gated ─┬─► MediaFetched ─► Done
   слишком свежие. Авторитетный фильтр — Silver в `ml`; наш gate лишь экономит
   трафик на скачивании. Отключаемый.
 
-## Манифест (`manifest.sqlite`)
+## Манифест (PostgreSQL, async sqlx)
 
 ```sql
 -- одна строка на видео, статусы по стадиям
 CREATE TABLE videos (
-  id            TEXT, platform TEXT, url TEXT,
-  discovered_at INTEGER, source TEXT, query TEXT, domain_hint TEXT,
+  platform TEXT, id TEXT, url TEXT,
+  discovered_at BIGINT, source TEXT, query TEXT,
+  channel_id TEXT, domain TEXT, duration_s DOUBLE PRECISION,
   status_meta   TEXT,   -- pending|ok|failed|filtered
   status_media  TEXT,   -- pending|ok|failed|skipped
-  retries_meta  INTEGER, retries_media INTEGER,
-  meta_path     TEXT, media_path TEXT, last_error TEXT,
-  updated_at    INTEGER,
+  retries_meta  INT, retries_media INT,
+  meta_path     TEXT, media_path TEXT, last_error TEXT, updated_at BIGINT,
   PRIMARY KEY (platform, id)
 );
-CREATE TABLE seeds (run_id TEXT, platform TEXT, kind TEXT, value TEXT, ts INTEGER);
+CREATE TABLE seeds (run_id TEXT, platform TEXT, kind TEXT, value TEXT, ts BIGINT);
+CREATE TABLE expanded_channels (platform TEXT, channel_id TEXT, hop INT, ts BIGINT,
+  PRIMARY KEY (platform, channel_id));
 ```
 
-sqlite — только под статусы (как в `ml/etl.md`). Сами данные — JSON/медиа на ФС.
+Postgres — только под статусы (данные — JSON/медиа в Sink: ФС/S3). Async sqlx
+позволяет распределённый сбор несколькими воркерами по одной очереди.
 
 ## Concurrency / надёжность
 
@@ -189,7 +192,6 @@ sqlite — только под статусы (как в `ml/etl.md`). Сами 
   raw/meta/<id>.json            # СЫРОЙ yt-dlp -J — формат ml, immutable
   raw/videos/<id>.mp4           # медиа (capped low-res)
   normalized/<platform>/<id>.json  # наша common-schema (extra)
-  manifest.sqlite               # статусы, резюмируемость
   discovery/<run_id>.jsonl      # провенанс discovery
 ```
 
@@ -224,7 +226,7 @@ media-opts, out_root).
 ## Стек (крейты)
 
 `tokio`, `reqwest`(rustls, gzip, brotli), `serde`/`serde_json`, `clap`(derive),
-`rusqlite`(bundled), `tracing`(+subscriber), `governor`, `backoff`, `anyhow`,
+`sqlx`(postgres), `tracing`(+subscriber), `governor`, `backoff`, `anyhow`,
 `thiserror`, `async-trait`, `futures`, `indicatif`, `time`. Внешние рантайм-деп:
 `yt-dlp` и `ffmpeg` в `PATH`.
 

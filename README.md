@@ -11,6 +11,13 @@
 - Rust 1.75+
 - **`yt-dlp`** в `PATH` (движок экстракции и discovery) — `brew install yt-dlp`
 - **`ffmpeg`** в `PATH` (нужен yt-dlp для муксинга)
+- **PostgreSQL** (манифест состояния). Локально проще через Docker:
+  ```bash
+  docker run -d --name detox-pg -p 5432:5432 \
+    -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=detox \
+    postgres:16-alpine
+  ```
+  DSN задаётся в `[manifest] url` или через env `DATABASE_URL`.
 
 ## Сборка
 
@@ -42,9 +49,10 @@ detox-parser single youtube "https://youtube.com/watch?v=..."   # разовый
 raw/meta/<id>.json            # сырой yt-dlp -J — формат, который читает ml
 raw/videos/<id>.mp4           # медиа (capped)
 normalized/<platform>/<id>.json  # кросс-платформенная common-schema
-manifest.sqlite               # статусы стадий (резюмируемость)
 discovery/<run_id>.jsonl      # провенанс discovery
 ```
+
+Статусы стадий (резюмируемость) живут не на диске, а в **PostgreSQL** (`[manifest]`).
 
 Раз метаданные берутся через `yt-dlp -J`, `raw/meta/<id>.json` уже в формате,
 который `ml` ждёт на Silver-стадии — интеграция без изменений в Python.
@@ -54,7 +62,7 @@ discovery/<run_id>.jsonl      # провенанс discovery
 | крейт                    | роль                                            |
 |--------------------------|-------------------------------------------------|
 | `detox-parser-core`      | типы, трейты-границы, конфиг, ошибки (контракт) |
-| `detox-parser-manifest`  | резюмируемое состояние в SQLite                 |
+| `detox-parser-manifest`  | резюмируемое состояние в PostgreSQL (async sqlx) |
 | `detox-parser-store`     | Bronze-sink на ФС                               |
 | `detox-parser-store-s3`  | Bronze-sink в S3/MinIO/R2 (data lake)           |
 | `detox-parser-ytdlp`     | async-обёртка над yt-dlp + нормализация          |
@@ -74,7 +82,8 @@ discovery/<run_id>.jsonl      # провенанс discovery
   во временный `staging_dir`, затем загружается и локальная копия удаляется.
 - **Версионирование/upsert:** при росте — table format **Apache Iceberg** или
   **Delta Lake** поверх parquet (ACID, schema evolution, time-travel).
-- **Состояние/манифест:** локально SQLite; для распределённого сбора — Postgres.
+- **Состояние/манифест:** PostgreSQL (async sqlx) — поддерживает распределённый
+  сбор несколькими воркерами по одной очереди.
 
 ## Статус / дальнейшее
 

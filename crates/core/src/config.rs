@@ -22,6 +22,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub storage: StorageConfig,
 
+    /// Состояние сбора (манифест) в PostgreSQL.
+    #[serde(default)]
+    pub manifest: ManifestConfig,
+
     /// Квоты медиа по доменам (балансировка выборки short/long).
     #[serde(default)]
     pub quota: QuotaConfig,
@@ -33,6 +37,23 @@ pub struct AppConfig {
     /// Источники сбора (Stage 0).
     #[serde(default)]
     pub seeds: Vec<Seed>,
+}
+
+/// Манифест состояния (PostgreSQL). DSN из конфига или env DATABASE_URL.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ManifestConfig {
+    pub url: String,
+}
+
+impl Default for ManifestConfig {
+    fn default() -> Self {
+        Self {
+            url: std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+                "postgres://postgres:postgres@127.0.0.1:5432/detox".into()
+            }),
+        }
+    }
 }
 
 /// Выбор бэкенда хранилища Bronze.

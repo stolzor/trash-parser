@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+                .unwrap_or_else(|_| "info,sqlx=warn".into()),
         )
         .init();
 
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
         Command::Run => pipeline.run(&run_id()).await?,
         Command::Status => {
             println!("{:<8} {:<10} count", "stage", "status");
-            for (stage, status, count) in pipeline.manifest().summary()? {
+            for (stage, status, count) in pipeline.manifest().summary().await? {
                 println!("{stage:<8} {status:<10} {count}");
             }
         }

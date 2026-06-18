@@ -68,9 +68,7 @@ impl Pipeline {
                 )
             }
         };
-        let manifest = Arc::new(Manifest::open(
-            std::path::Path::new(&cfg.out_root).join("manifest.sqlite"),
-        )?);
+        let manifest = Arc::new(Manifest::connect(&cfg.manifest.url).await?);
 
         let rps = NonZeroU32::new(cfg.concurrency.requests_per_sec.max(1)).unwrap();
         let media_dir = store.staging_dir();
@@ -123,13 +121,13 @@ impl Pipeline {
         for seed in &self.cfg.seeds {
             let backend = self.backend(seed.platform);
             backend.limiter.until_ready().await;
-            self.manifest.record_seed(run_id, seed, now_unix())?;
+            self.manifest.record_seed(run_id, seed, now_unix()).await?;
 
             match backend.discoverer.discover(seed).await {
                 Ok(candidates) => {
                     info!(platform = %seed.platform, value = %seed.value, found = candidates.len(), "discovered");
                     for c in &candidates {
-                        if self.manifest.upsert_candidate(c)? {
+                        if self.manifest.upsert_candidate(c).await? {
                             new_total += 1;
                         }
                         let line = serde_json::to_string(c)?;
@@ -150,7 +148,7 @@ impl Pipeline {
     pub async fn harvest(&self) -> Result<()> {
         for (platform, backend) in &self.backends {
             let pending =
-                self.manifest.pending_meta(*platform, self.max_retries, 100_000)?;
+                self.manifest.pending_meta(*platform, self.max_retries, 100_000).await?;
             if pending.is_empty() {
                 continue;
             }
@@ -177,12 +175,12 @@ impl Pipeline {
                             }
                             // недоступное видео — терминально, исключаем из выборки
                             Err(Error::Unavailable(msg)) => {
-                                let _ = manifest.mark_meta(&video, Status::Filtered, None, None, None, None, Some(&msg), now_unix());
-                                let _ = manifest.mark_media(&video, Status::Skipped, None, None, now_unix());
+                                let _ = manifest.mark_meta(&video, Status::Filtered, None, None, None, None, Some(&msg), now_unix()).await;
+                                let _ = manifest.mark_media(&video, Status::Skipped, None, None, now_unix()).await;
                             }
                             Err(e) => {
                                 warn!(%video, error = %e, "meta failed");
-                                let _ = manifest.mark_meta(&video, Status::Failed, None, None, None, None, Some(&e.to_string()), now_unix());
+                                let _ = manifest.mark_meta(&video, Status::Failed, None, None, None, None, Some(&e.to_string()), now_unix()).await;
                             }
                         }
                     }
@@ -209,7 +207,7 @@ impl Pipeline {
         // Счётчики скачанного по доменам — засеваем уже загруженным (резюм-safe),
         // дальше резервируем слоты атомарно, чтобы воркеры не перебрали квоту.
         let mut seed: HashMap<String, usize> = HashMap::new();
-        for (d, n) in self.manifest.media_ok_by_domain()? {
+        for (d, n) in self.manifest.media_ok_by_domain().await? {
             seed.insert(d, n as usize);
         }
         let counters: Arc<HashMap<String, AtomicUsize>> = Arc::new(
@@ -221,7 +219,7 @@ impl Pipeline {
 
         for (platform, backend) in &self.backends {
             let pending =
-                self.manifest.pending_media(*platform, self.max_retries, 100_000)?;
+                self.manifest.pending_media(*platform, self.max_retries, 100_000).await?;
             if pending.is_empty() {
                 continue;
             }
@@ -247,7 +245,7 @@ impl Pipeline {
                                     if counter.fetch_add(1, Ordering::SeqCst) >= limit {
                                         counter.fetch_sub(1, Ordering::SeqCst); // откат
                                         let _ = manifest.mark_media(
-                                            &video, Status::Skipped, None, Some("quota"), now_unix());
+                                            &video, Status::Skipped, None, Some("quota"), now_unix()).await;
                                         return;
                                     }
                                     counters.get(d) // слот занят, освободим при провале
@@ -269,18 +267,18 @@ impl Pipeline {
                         match retry(max_retries, || media.fetch(&video, &url, &vid_opts)).await {
                             Ok(art) => {
                                 let _ = store.put_media(&art).await;
-                                let _ = manifest.mark_media(&video, Status::Ok, Some(&art.path), None, now_unix());
+                                let _ = manifest.mark_media(&video, Status::Ok, Some(&art.path), None, now_unix()).await;
                             }
                             Err(Error::Unavailable(msg)) => {
                                 if let Some(c) = reserved { c.fetch_sub(1, Ordering::SeqCst); }
                                 cleanup_partial(&media_dir, &video.id).await;
-                                let _ = manifest.mark_media(&video, Status::Skipped, None, Some(&msg), now_unix());
+                                let _ = manifest.mark_media(&video, Status::Skipped, None, Some(&msg), now_unix()).await;
                             }
                             Err(e) => {
                                 if let Some(c) = reserved { c.fetch_sub(1, Ordering::SeqCst); }
                                 warn!(%video, error = %e, "media failed");
                                 cleanup_partial(&media_dir, &video.id).await;
-                                let _ = manifest.mark_media(&video, Status::Failed, None, Some(&e.to_string()), now_unix());
+                                let _ = manifest.mark_media(&video, Status::Failed, None, Some(&e.to_string()), now_unix()).await;
                             }
                         }
                     }
@@ -303,7 +301,7 @@ impl Pipeline {
                 continue;
             }
             let channels =
-                self.manifest.unexpanded_channels(*platform, cfg.max_channels_per_hop)?;
+                self.manifest.unexpanded_channels(*platform, cfg.max_channels_per_hop).await?;
             if channels.is_empty() {
                 continue;
             }
@@ -320,14 +318,14 @@ impl Pipeline {
                 match backend.discoverer.discover(&seed).await {
                     Ok(cands) => {
                         for c in &cands {
-                            if self.manifest.upsert_candidate(c)? {
+                            if self.manifest.upsert_candidate(c).await? {
                                 new_total += 1;
                             }
                         }
                     }
                     Err(e) => warn!(%channel, error = %e, "expand discover failed"),
                 }
-                self.manifest.mark_channel_expanded(*platform, &channel, hop, now_unix())?;
+                self.manifest.mark_channel_expanded(*platform, &channel, hop, now_unix()).await?;
             }
         }
         Ok(new_total)
@@ -407,11 +405,11 @@ async fn persist_meta(
         extract.normalized.duration_s,
         None,
         now,
-    )?;
+    ).await?;
 
     // gate решает, качать ли медиа
     if gate.gate_before_media && !passes_gate(&extract.normalized, gate) {
-        manifest.mark_media(&extract.video, Status::Skipped, None, Some("gate"), now)?;
+        manifest.mark_media(&extract.video, Status::Skipped, None, Some("gate"), now).await?;
     }
     Ok(())
 }
