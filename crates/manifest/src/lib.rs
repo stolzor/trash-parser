@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS videos (
     query         TEXT,
     channel_id    TEXT,                             -- заполняется после harvest (для expand)
     domain        TEXT,                             -- short|long, из duration (для квот)
+    duration_s    REAL,                             -- длительность (для оконного скачивания long)
     status_meta   TEXT NOT NULL DEFAULT 'pending',  -- pending|ok|failed|filtered
     status_media  TEXT NOT NULL DEFAULT 'pending',  -- pending|ok|failed|skipped
     retries_meta  INTEGER NOT NULL DEFAULT 0,
@@ -69,6 +70,9 @@ impl Status {
     }
 }
 
+/// Строка очереди медиа: `(id, url, domain, duration_s)`.
+pub type PendingMedia = (VideoId, String, Option<String>, Option<f64>);
+
 pub struct Manifest {
     conn: Mutex<Connection>,
 }
@@ -84,6 +88,7 @@ impl Manifest {
         // миграция старых БД: добавить колонки, если их нет (ошибку дубля глотаем)
         let _ = conn.execute("ALTER TABLE videos ADD COLUMN channel_id TEXT", []);
         let _ = conn.execute("ALTER TABLE videos ADD COLUMN domain TEXT", []);
+        let _ = conn.execute("ALTER TABLE videos ADD COLUMN duration_s REAL", []);
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -131,6 +136,7 @@ impl Manifest {
         meta_path: Option<&str>,
         channel_id: Option<&str>,
         domain: Option<&str>,
+        duration_s: Option<f64>,
         err: Option<&str>,
         now: i64,
     ) -> Result<()> {
@@ -138,12 +144,12 @@ impl Manifest {
             .execute(
                 "UPDATE videos SET status_meta=?3, meta_path=COALESCE(?4, meta_path),
                     channel_id=COALESCE(?7, channel_id), domain=COALESCE(?8, domain),
-                    last_error=?5, updated_at=?6,
+                    duration_s=COALESCE(?9, duration_s), last_error=?5, updated_at=?6,
                     retries_meta = retries_meta + (CASE WHEN ?3='failed' THEN 1 ELSE 0 END)
                  WHERE platform=?1 AND id=?2",
                 params![
                     v.platform.as_str(), v.id, status.as_str(),
-                    meta_path, err, now, channel_id, domain
+                    meta_path, err, now, channel_id, domain, duration_s
                 ],
             )
             .map_err(map_err)?;
@@ -236,11 +242,11 @@ impl Manifest {
         platform: Platform,
         max_retries: u32,
         limit: usize,
-    ) -> Result<Vec<(VideoId, String, Option<String>)>> {
+    ) -> Result<Vec<PendingMedia>> {
         let conn = self.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT id, url, domain FROM videos
+                "SELECT id, url, domain, duration_s FROM videos
                  WHERE platform=?1 AND status_meta='ok'
                    AND (status_media='pending'
                         OR (status_media='failed' AND retries_media < ?2))
@@ -253,6 +259,7 @@ impl Manifest {
                     VideoId::new(platform, r.get::<_, String>(0)?),
                     r.get::<_, String>(1)?,
                     r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<f64>>(3)?,
                 ))
             })
             .map_err(map_err)?;
@@ -340,8 +347,8 @@ mod tests {
         }
         let v1 = VideoId::new(Platform::Youtube, "v1");
         let v2 = VideoId::new(Platform::Youtube, "v2");
-        m.mark_meta(&v1, Status::Ok, Some("p1"), Some("UC_channelA"), Some("long"), None, 1).unwrap();
-        m.mark_meta(&v2, Status::Ok, Some("p2"), Some("UC_channelA"), Some("short"), None, 1).unwrap();
+        m.mark_meta(&v1, Status::Ok, Some("p1"), Some("UC_channelA"), Some("long"), Some(600.0), None, 1).unwrap();
+        m.mark_meta(&v2, Status::Ok, Some("p2"), Some("UC_channelA"), Some("short"), Some(30.0), None, 1).unwrap();
 
         // ровно один уникальный нерасширённый канал
         assert_eq!(
@@ -378,14 +385,14 @@ mod tests {
         let s1 = VideoId::new(Platform::Youtube, "s1");
         let l1 = VideoId::new(Platform::Youtube, "l1");
         let l2 = VideoId::new(Platform::Youtube, "l2");
-        m.mark_meta(&s1, Status::Ok, Some("p"), None, Some("short"), None, 1).unwrap();
-        m.mark_meta(&l1, Status::Ok, Some("p"), None, Some("long"), None, 1).unwrap();
-        m.mark_meta(&l2, Status::Ok, Some("p"), None, Some("long"), None, 1).unwrap();
+        m.mark_meta(&s1, Status::Ok, Some("p"), None, Some("short"), Some(20.0), None, 1).unwrap();
+        m.mark_meta(&l1, Status::Ok, Some("p"), None, Some("long"), Some(600.0), None, 1).unwrap();
+        m.mark_meta(&l2, Status::Ok, Some("p"), None, Some("long"), Some(900.0), None, 1).unwrap();
 
-        // pending_media отдаёт домен — по нему квота решает скачивать или нет
+        // pending_media отдаёт домен и длительность — по ним решаются квота и окна
         let pending = m.pending_media(Platform::Youtube, 2, 10).unwrap();
         assert_eq!(pending.len(), 3);
-        assert!(pending.iter().all(|(_, _, d)| d.is_some()));
+        assert!(pending.iter().all(|(_, _, d, dur)| d.is_some() && dur.is_some()));
 
         // засев квоты считает уже скачанное по доменам
         m.mark_media(&s1, Status::Ok, Some("s1.mp4"), None, 2).unwrap();

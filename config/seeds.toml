@@ -10,6 +10,8 @@ requests_per_sec = 2    # rate-limit на платформу
 download = true
 format = "worst[ext=mp4]/worst"   # capped low-res (хватает для фич ml)
 max_filesize = "100M"
+long_windows = 4                  # длинные видео качаем N окнами, а не целиком (0 = целиком)
+long_window_seconds = 30.0        # длина окна (синхр. с ml LONG_WINDOW_SECONDS)
 
 [discovery]
 max_hops = 1                # 0 = только seeds; >0 = расширять по каналам (анти-survivorship-bias)

@@ -135,42 +135,58 @@ impl Extractor for YtDlp {
 #[async_trait::async_trait]
 impl MediaFetcher for YtDlp {
     async fn fetch(&self, video: &VideoId, url: &str, opts: &MediaOpts) -> Result<MediaArtifact> {
-        let out_tmpl = self
-            .media_dir
-            .join(format!("{}.%(ext)s", video.id))
-            .to_string_lossy()
-            .into_owned();
+        let windowed = !opts.sections.is_empty();
+        // для окон шаблон включает start, чтобы файлы не перезаписывались
+        let out_tmpl = if windowed {
+            self.media_dir.join(format!("{}.win_%(section_start)s.%(ext)s", video.id))
+        } else {
+            self.media_dir.join(format!("{}.%(ext)s", video.id))
+        }
+        .to_string_lossy()
+        .into_owned();
 
-        let timeout = opts.socket_timeout_s.to_string();
-        let retries = opts.retries.to_string();
-        let mut args: Vec<&str> = vec![
-            "--no-warnings",
-            "--no-playlist",
-            "-f",
-            &opts.format,
-            "-o",
-            &out_tmpl,
-            "--socket-timeout",
-            &timeout,
-            "--retries",
-            &retries,
-            // путь к итоговому файлу — на stdout, без лишнего
-            "--print",
-            "after_move:filepath",
+        // owned-строки: section-аргументы строятся динамически
+        let mut args: Vec<String> = vec![
+            "--no-warnings".into(),
+            "--no-playlist".into(),
+            "-f".into(),
+            opts.format.clone(),
+            "-o".into(),
+            out_tmpl,
+            "--socket-timeout".into(),
+            opts.socket_timeout_s.to_string(),
+            "--retries".into(),
+            opts.retries.to_string(),
+            // печатаем путь(и) итоговых файлов на stdout
+            "--print".into(),
+            "after_move:filepath".into(),
         ];
+        for (start, end) in &opts.sections {
+            args.push("--download-sections".into());
+            args.push(format!("*{start}-{end}"));
+        }
         if let Some(cap) = &opts.max_filesize {
-            args.push("--max-filesize");
-            args.push(cap);
+            args.push("--max-filesize".into());
+            args.push(cap.clone());
         }
-        args.push(url);
+        args.push(url.to_string());
 
-        let out = self.run(&args).await?;
-        let path = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-        if path.is_empty() {
-            return Err(Error::Tool("yt-dlp не вернул путь к файлу (возможно, превышен max-filesize)".into()));
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = self.run(&arg_refs).await?;
+
+        // при окнах yt-dlp печатает по строке на файл
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let paths: Vec<&str> = stdout.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        if paths.is_empty() {
+            return Err(Error::Tool(
+                "yt-dlp не вернул путь к файлу (возможно, превышен max-filesize)".into(),
+            ));
         }
-        let bytes = tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0);
-        Ok(MediaArtifact { video: video.clone(), path, bytes })
+        let mut total = 0u64;
+        for p in &paths {
+            total += tokio::fs::metadata(p).await.map(|m| m.len()).unwrap_or(0);
+        }
+        Ok(MediaArtifact { video: video.clone(), path: paths[0].to_owned(), bytes: total })
     }
 }
 

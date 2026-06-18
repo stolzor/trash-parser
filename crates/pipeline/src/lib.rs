@@ -155,12 +155,12 @@ impl Pipeline {
                             }
                             // недоступное видео — терминально, исключаем из выборки
                             Err(Error::Unavailable(msg)) => {
-                                let _ = manifest.mark_meta(&video, Status::Filtered, None, None, None, Some(&msg), now_unix());
+                                let _ = manifest.mark_meta(&video, Status::Filtered, None, None, None, None, Some(&msg), now_unix());
                                 let _ = manifest.mark_media(&video, Status::Skipped, None, None, now_unix());
                             }
                             Err(e) => {
                                 warn!(%video, error = %e, "meta failed");
-                                let _ = manifest.mark_meta(&video, Status::Failed, None, None, None, Some(&e.to_string()), now_unix());
+                                let _ = manifest.mark_meta(&video, Status::Failed, None, None, None, None, Some(&e.to_string()), now_unix());
                             }
                         }
                     }
@@ -181,6 +181,8 @@ impl Pipeline {
         let opts = self.cfg.media.to_opts();
         let media_dir = self.store.media_dir();
         let quota = self.cfg.quota.clone();
+        let long_windows = self.cfg.media.long_windows;
+        let window_secs = self.cfg.media.long_window_seconds;
 
         // Счётчики скачанного по доменам — засеваем уже загруженным (резюм-safe),
         // дальше резервируем слоты атомарно, чтобы воркеры не перебрали квоту.
@@ -205,7 +207,7 @@ impl Pipeline {
 
             let workers = self.cfg.concurrency.media_workers.max(1);
             stream::iter(pending)
-                .for_each_concurrent(workers, |(video, url, domain)| {
+                .for_each_concurrent(workers, |(video, url, domain, duration)| {
                     let media = backend.media.clone();
                     let limiter = backend.limiter.clone();
                     let manifest = self.manifest.clone();
@@ -233,8 +235,16 @@ impl Pipeline {
                             None => None,
                         };
 
+                        // длинные видео качаем не целиком, а сэмплированными окнами
+                        let mut vid_opts = opts.clone();
+                        if domain.as_deref() == Some("long") && long_windows > 0 {
+                            if let Some(dur) = duration {
+                                vid_opts.sections = sample_windows(dur, window_secs, long_windows);
+                            }
+                        }
+
                         limiter.until_ready().await;
-                        match retry(max_retries, || media.fetch(&video, &url, &opts)).await {
+                        match retry(max_retries, || media.fetch(&video, &url, &vid_opts)).await {
                             Ok(art) => {
                                 let _ = store.put_media(&art).await;
                                 let _ = manifest.mark_media(&video, Status::Ok, Some(&art.path), None, now_unix());
@@ -372,6 +382,7 @@ async fn persist_meta(
         Some(&raw_ref.path),
         channel_id.as_deref(),
         domain,
+        extract.normalized.duration_s,
         None,
         now,
     )?;
@@ -381,6 +392,26 @@ async fn persist_meta(
         manifest.mark_media(&extract.video, Status::Skipped, None, Some("gate"), now)?;
     }
     Ok(())
+}
+
+/// `n` равномерно распределённых окон длины `win` по ролику длительности `dur`.
+/// Пустой результат = качать целиком (ролик короче окна / окна не нужны).
+/// Для `n>1`: первое окно с начала, последнее — к концу, остальные между.
+fn sample_windows(dur: f64, win: f64, n: usize) -> Vec<(f64, f64)> {
+    if n == 0 || dur <= win {
+        return Vec::new();
+    }
+    let last_start = dur - win;
+    if n == 1 {
+        let s = (last_start / 2.0).round();
+        return vec![(s, s + win)];
+    }
+    (0..n)
+        .map(|i| {
+            let s = (last_start * i as f64 / (n - 1) as f64).round();
+            (s, s + win)
+        })
+        .collect()
 }
 
 /// Удалить недокачанные фрагменты (`<id>.*.part`, `.ytdl`) после провала.
@@ -412,5 +443,29 @@ where
             }
             Err(e) => return Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sample_windows;
+
+    #[test]
+    fn whole_download_when_not_windowable() {
+        assert!(sample_windows(30.0, 30.0, 4).is_empty(), "ролик ≤ окна → целиком");
+        assert!(sample_windows(600.0, 30.0, 0).is_empty(), "n=0 → целиком");
+    }
+
+    #[test]
+    fn long_video_samples_evenly() {
+        let w = sample_windows(600.0, 30.0, 3);
+        assert_eq!(w, vec![(0.0, 30.0), (285.0, 315.0), (570.0, 600.0)]);
+        // все окна в пределах ролика
+        assert!(w.iter().all(|(s, e)| *s >= 0.0 && *e <= 600.0));
+    }
+
+    #[test]
+    fn single_window_is_centered() {
+        assert_eq!(sample_windows(100.0, 30.0, 1), vec![(35.0, 65.0)]);
     }
 }

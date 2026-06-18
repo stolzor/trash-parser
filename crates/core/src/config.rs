@@ -88,6 +88,10 @@ pub struct MediaConfig {
     pub download: bool,
     pub format: String,
     pub max_filesize: Option<String>,
+    /// Сколько окон сэмплировать у длинных видео (0 = качать целиком).
+    pub long_windows: usize,
+    /// Длина окна (с) — синхронизировано с ml LONG_WINDOW_SECONDS.
+    pub long_window_seconds: f64,
 }
 
 impl Default for MediaConfig {
@@ -96,6 +100,8 @@ impl Default for MediaConfig {
             download: true,
             format: "worst[ext=mp4]/worst".into(),
             max_filesize: Some("100M".into()),
+            long_windows: 4,
+            long_window_seconds: 30.0,
         }
     }
 }

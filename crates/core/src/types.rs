@@ -240,6 +240,9 @@ pub struct MediaOpts {
     pub max_filesize: Option<String>,
     pub socket_timeout_s: u64,
     pub retries: u32,
+    /// Временные окна `(start_s, end_s)` для скачивания вместо целого файла.
+    /// Пусто = качать целиком. Для длинных видео — сэмплированные окна.
+    pub sections: Vec<(f64, f64)>,
 }
 
 impl Default for MediaOpts {
@@ -249,6 +252,7 @@ impl Default for MediaOpts {
             max_filesize: Some("100M".into()),
             socket_timeout_s: 30,
             retries: 2,
+            sections: Vec::new(),
         }
     }
 }
