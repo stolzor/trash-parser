@@ -1,0 +1,66 @@
+# Локальная инфраструктура парсера: PostgreSQL (манифест) + MinIO (Bronze в S3).
+# Оба персистентных хранилища — на named volumes (переживают пересоздание).
+#
+#   docker compose up -d         # поднять инфру + создать бакет
+#   docker compose down          # остановить (данные в томах сохраняются)
+#   docker compose down -v       # снести вместе с данными
+#
+# Парсер запускается на хосте и ходит на 127.0.0.1:5433 (PG) и :9000 (S3).
+# Креды S3 для парсера — из env: AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin
+name: detox
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: detox-pg
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: detox
+    ports:
+      - "5433:5432"
+    volumes:
+      - detox-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d detox"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    container_name: detox-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web-консоль (http://127.0.0.1:9001)
+    volumes:
+      - detox-minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc --version >/dev/null 2>&1 || exit 0"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # одноразовый сервис: ждёт MinIO и создаёт бакет
+  createbucket:
+    image: minio/mc
+    container_name: detox-createbucket
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done;
+      mc mb -p local/detox-bronze;
+      echo 'bucket detox-bronze ready';
+      "
+    restart: "no"
+
+volumes:
+  detox-minio-data:
+    name: detox-minio-data    # фикс. имя → переиспользует уже залитые данные
+  detox-pg-data:
+    name: detox-pg-data

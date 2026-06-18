@@ -3,8 +3,9 @@
 out_root = "./data"
 
 [manifest]
-# Состояние сбора (статусы стадий) в PostgreSQL. Можно переопределить env DATABASE_URL.
-url = "postgres://postgres:postgres@127.0.0.1:5432/detox"
+# Состояние сбора (статусы стадий) в PostgreSQL (см. docker-compose.yml, порт 5433).
+# Можно переопределить env DATABASE_URL.
+url = "postgres://postgres:postgres@127.0.0.1:5433/detox"
 
 [storage]
 backend = "s3"             # данные → объектное хранилище (отдельно от ml). "fs" — локально.

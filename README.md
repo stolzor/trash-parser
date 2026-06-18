@@ -11,22 +11,26 @@
 - Rust 1.75+
 - **`yt-dlp`** в `PATH` (движок экстракции и discovery) — `brew install yt-dlp`
 - **`ffmpeg`** в `PATH` (нужен yt-dlp для муксинга)
-- **PostgreSQL** (манифест состояния). Локально проще через Docker:
-  ```bash
-  docker run -d --name detox-pg -p 5432:5432 \
-    -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=detox \
-    postgres:16-alpine
-  ```
-  DSN задаётся в `[manifest] url` или через env `DATABASE_URL`.
-- **Объектное хранилище** (по умолчанию `backend="s3"`) — S3 / R2 или локально MinIO:
-  ```bash
-  docker run -d --name detox-minio -p 9000:9000 \
-    -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-    minio/minio server /data
-  # создать бакет (mc) и задать креды в env:
-  export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin
-  ```
-  Параметры — в `[storage.s3]`. Для чисто локального запуска без S3: `backend="fs"`.
+- **PostgreSQL** (манифест) + **объектное хранилище** (Bronze, по умолчанию
+  `backend="s3"`) — поднимаются одним `docker compose` (см. ниже). Оба на
+  named volumes. Для прод-S3/R2 просто укажи реальные `[storage.s3]` + креды.
+
+## Локальная инфра (Docker Compose)
+
+`docker-compose.yml` поднимает PostgreSQL и MinIO (S3 + web-консоль) на
+персистентных named volumes и создаёт бакет `detox-bronze`:
+
+```bash
+docker compose up -d            # PG :5433, MinIO API :9000, консоль :9001
+export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin
+# ... запускаешь парсер (см. ниже) ...
+docker compose down             # стоп; данные остаются в томах
+docker compose down -v          # снести вместе с данными
+```
+
+- Web-консоль MinIO: <http://127.0.0.1:9001> (minioadmin / minioadmin).
+- Тома: `detox-pg-data`, `detox-minio-data` (переживают пересоздание).
+- Чисто локально без S3: `backend="fs"` — тогда MinIO не нужен.
 
 ## Сборка
 
