@@ -33,9 +33,13 @@ enum Command {
     Status,
     /// Экспорт нормализованных записей в parquet (для аналитики/DuckDB).
     Export {
-        /// Путь к parquet (по умолчанию <out_root>/export/normalized.parquet).
+        /// Путь вывода (по умолчанию <out_root>/export/normalized.parquet,
+        /// либо каталог <out_root>/export/parquet при --partitioned).
         #[arg(long)]
         out: Option<String>,
+        /// Hive-партиционирование: platform=…/domain=…/dt=…/part.parquet.
+        #[arg(long)]
+        partitioned: bool,
     },
     /// Разовый парс одного URL.
     Single {
@@ -75,6 +79,22 @@ fn run_id() -> String {
     format!("run-{secs}")
 }
 
+/// Экспорт в parquet (без pipeline/Postgres — только локальные файлы).
+fn run_export(out_root: &str, out: Option<String>, partitioned: bool) -> Result<()> {
+    let root = std::path::Path::new(out_root);
+    let base = out_root.trim_end_matches('/');
+    if partitioned {
+        let out_dir = out.unwrap_or_else(|| format!("{base}/export/parquet"));
+        let n = detox_parser_export::export_partitioned(root, std::path::Path::new(&out_dir))?;
+        println!("экспортировано строк: {n} → {out_dir}/platform=…/domain=…/dt=…/part.parquet");
+    } else {
+        let out_path = out.unwrap_or_else(|| format!("{base}/export/normalized.parquet"));
+        let n = detox_parser_export::export_parquet(root, std::path::Path::new(&out_path))?;
+        println!("экспортировано строк: {n} → {out_path}");
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -87,8 +107,14 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = load_config(&cli.config)?;
     let out_root = cfg.out_root.clone();
-    let pipeline = Pipeline::new(cfg).await?;
 
+    // Export читает только локальные normalized/*.json — pipeline/Postgres не нужны.
+    if let Command::Export { out, partitioned } = &cli.command {
+        run_export(&out_root, out.clone(), *partitioned)?;
+        return Ok(());
+    }
+
+    let pipeline = Pipeline::new(cfg).await?;
     match cli.command {
         Command::Discover => {
             let n = pipeline.discover(&run_id()).await?;
@@ -104,16 +130,7 @@ async fn main() -> Result<()> {
                 println!("{stage:<8} {status:<10} {count}");
             }
         }
-        Command::Export { out } => {
-            let out_path = out.unwrap_or_else(|| {
-                format!("{}/export/normalized.parquet", out_root.trim_end_matches('/'))
-            });
-            let n = detox_parser_export::export_parquet(
-                std::path::Path::new(&out_root),
-                std::path::Path::new(&out_path),
-            )?;
-            println!("экспортировано строк: {n} → {out_path}");
-        }
+        Command::Export { .. } => unreachable!("handled before pipeline"),
         Command::Single { platform, url } => {
             let v = pipeline.single(platform.into(), &url).await?;
             println!("{}", serde_json::to_string_pretty(&v)?);

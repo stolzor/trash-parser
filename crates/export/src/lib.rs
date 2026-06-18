@@ -5,6 +5,7 @@
 //! json-поля (heatmap/chapters/music) сворачиваются в флаги/счётчики.
 
 use arrow::datatypes::FieldRef;
+use arrow::record_batch::RecordBatch;
 use detox_parser_core::error::{Error, Result};
 use detox_parser_core::types::NormalizedVideo;
 use parquet::arrow::ArrowWriter;
@@ -12,6 +13,7 @@ use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use serde_arrow::schema::{SchemaLike, TracingOptions};
+use std::collections::HashMap;
 use std::path::Path;
 use tracing::debug;
 
@@ -58,7 +60,20 @@ pub struct ExportRow {
     pub query: Option<String>,
     pub extractor: String,
     pub fetched_at: i64,
+    /// Дата сбора (UTC, YYYY-MM-DD) — ключ партиционирования.
+    pub dt: String,
     pub raw_path: Option<String>,
+}
+
+/// Unix-секунды → "YYYY-MM-DD" (UTC). Для партиции по дате сбора.
+fn dt_from_unix(secs: i64) -> String {
+    match time::OffsetDateTime::from_unix_timestamp(secs) {
+        Ok(t) => {
+            let d = t.date();
+            format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day())
+        }
+        Err(_) => "1970-01-01".to_string(),
+    }
 }
 
 impl From<&NormalizedVideo> for ExportRow {
@@ -96,6 +111,7 @@ impl From<&NormalizedVideo> for ExportRow {
             query: v.provenance.query.clone(),
             extractor: v.provenance.extractor.clone(),
             fetched_at: v.provenance.fetched_at,
+            dt: dt_from_unix(v.provenance.fetched_at),
             raw_path: v.raw_path.clone(),
         }
     }
@@ -128,30 +144,89 @@ fn read_rows(out_root: &Path) -> Result<Vec<ExportRow>> {
     Ok(rows)
 }
 
-/// Собрать нормализованные записи под `out_root` в parquet по пути `out_path`.
+fn schema_fields() -> Result<Vec<FieldRef>> {
+    Vec::<FieldRef>::from_type::<ExportRow>(TracingOptions::default())
+        .map_err(|e| Error::Storage(format!("arrow schema: {e}")))
+}
+
+/// Записать готовый RecordBatch в Snappy-parquet (создаёт родительские каталоги).
+fn write_batch(batch: &RecordBatch, out_path: &Path) -> Result<()> {
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::File::create(out_path)?;
+    let props = WriterProperties::builder().set_compression(Compression::SNAPPY).build();
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))
+        .map_err(|e| Error::Storage(format!("parquet writer: {e}")))?;
+    writer.write(batch).map_err(|e| Error::Storage(format!("parquet write: {e}")))?;
+    writer.close().map_err(|e| Error::Storage(format!("parquet close: {e}")))?;
+    Ok(())
+}
+
+/// Собрать нормализованные записи под `out_root` в один parquet по `out_path`.
 /// Возвращает число записанных строк.
 pub fn export_parquet(out_root: &Path, out_path: &Path) -> Result<usize> {
     let rows = read_rows(out_root)?;
     if rows.is_empty() {
         return Ok(0);
     }
-    if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let fields = Vec::<FieldRef>::from_type::<ExportRow>(TracingOptions::default())
-        .map_err(|e| Error::Storage(format!("arrow schema: {e}")))?;
+    let fields = schema_fields()?;
     let batch = serde_arrow::to_record_batch(&fields, &rows)
         .map_err(|e| Error::Storage(format!("arrow batch: {e}")))?;
-
-    let file = std::fs::File::create(out_path)?;
-    let props = WriterProperties::builder()
-        .set_compression(Compression::SNAPPY)
-        .build();
-    let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))
-        .map_err(|e| Error::Storage(format!("parquet writer: {e}")))?;
-    writer.write(&batch).map_err(|e| Error::Storage(format!("parquet write: {e}")))?;
-    writer.close().map_err(|e| Error::Storage(format!("parquet close: {e}")))?;
-
+    write_batch(&batch, out_path)?;
     Ok(rows.len())
+}
+
+/// Колонки-партиции — кодируются в пути (Hive), из файла исключаются.
+const PARTITION_COLS: [&str; 3] = ["platform", "domain", "dt"];
+
+/// Экспорт в Hive-партиционированный parquet под `out_base`:
+/// `platform=<p>/domain=<d>/dt=<date>/part.parquet`. Партиционные колонки в
+/// файлы не пишутся (DuckDB/Polars восстановят их из пути при hive_partitioning).
+/// Возвращает число записанных строк.
+pub fn export_partitioned(out_root: &Path, out_base: &Path) -> Result<usize> {
+    let rows = read_rows(out_root)?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    // группируем по (platform, domain|unknown, dt)
+    let mut groups: HashMap<(String, String, String), Vec<&ExportRow>> = HashMap::new();
+    for r in &rows {
+        let key = (
+            r.platform.clone(),
+            r.domain.clone().unwrap_or_else(|| "unknown".into()),
+            r.dt.clone(),
+        );
+        groups.entry(key).or_default().push(r);
+    }
+
+    let fields = schema_fields()?;
+    // индексы колонок, которые ОСТАВЛЯЕМ в файле (всё, кроме партиционных)
+    let keep: Vec<usize> = fields
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| !PARTITION_COLS.contains(&f.name().as_str()))
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut total = 0usize;
+    for ((platform, domain, dt), part_rows) in groups {
+        // serde_arrow сериализует и срез ссылок — клонировать строки не нужно
+        let batch = serde_arrow::to_record_batch(&fields, &part_rows)
+            .map_err(|e| Error::Storage(format!("arrow batch: {e}")))?;
+        let batch = batch
+            .project(&keep)
+            .map_err(|e| Error::Storage(format!("project partition cols: {e}")))?;
+
+        let path = out_base
+            .join(format!("platform={platform}"))
+            .join(format!("domain={domain}"))
+            .join(format!("dt={dt}"))
+            .join("part.parquet");
+        write_batch(&batch, &path)?;
+        debug!(%platform, %domain, %dt, rows = part_rows.len(), "wrote partition");
+        total += part_rows.len();
+    }
+    Ok(total)
 }

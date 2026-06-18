@@ -37,7 +37,8 @@ detox-parser media        # Stage 1b: скачать медиа (capped low-res)
 detox-parser run          # всё подряд: discover → harvest → media
 detox-parser expand       # тянуть полные аплоады каналов (анти-survivorship-bias)
 detox-parser status       # сводка по стадиям из манифеста
-detox-parser export       # нормализованное → parquet (для DuckDB/Polars)
+detox-parser export       # нормализованное → один parquet (DuckDB/Polars)
+detox-parser export --partitioned   # → Hive: platform=…/domain=…/dt=…/part.parquet
 detox-parser single youtube "https://youtube.com/watch?v=..."   # разовый парс
 ```
 
@@ -80,6 +81,13 @@ discovery/<run_id>.jsonl      # провенанс discovery
   медиа) пишется в **S3 / MinIO / R2** с той же раскладкой ключей, что на ФС;
   DuckDB/Polars читают из S3 напрямую (data lake). Креды — из env. Медиа сначала
   во временный `staging_dir`, затем загружается и локальная копия удаляется.
+- **Партиционированный parquet:** `export --partitioned` пишет Hive-layout
+  `platform=…/domain=…/dt=…/part.parquet` (партиционные колонки — в пути, не в
+  файлах). Залив в бакет (`mc cp`/`aws s3 sync`), читаешь с pruning:
+  ```sql
+  SELECT * FROM read_parquet('s3://bucket/parquet/**/*.parquet', hive_partitioning=true)
+  WHERE platform='youtube' AND domain='short' AND dt >= '2024-06-01';
+  ```
 - **Версионирование/upsert:** при росте — table format **Apache Iceberg** или
   **Delta Lake** поверх parquet (ACID, schema evolution, time-travel).
 - **Состояние/манифест:** PostgreSQL (async sqlx) — поддерживает распределённый
