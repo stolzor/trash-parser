@@ -9,6 +9,7 @@ authors.workspace = true
 detox-parser-core = { workspace = true }
 detox-parser-manifest = { workspace = true }
 detox-parser-store = { workspace = true }
+detox-parser-store-s3 = { workspace = true }
 detox-parser-ytdlp = { workspace = true }
 detox-parser-youtube = { workspace = true }
 detox-parser-tiktok = { workspace = true }

@@ -1,6 +1,17 @@
 # Конфиг сбора. out_root по умолчанию = вход ml (Bronze падает прямо в пайплайн).
 out_root = "../ml/data"
 
+[storage]
+backend = "fs"             # "fs" — локальная ФС; "s3" — объектное хранилище
+# Для backend = "s3" (S3 / MinIO / R2). Креды — из env (AWS_ACCESS_KEY_ID/SECRET).
+# [storage.s3]
+# bucket = "detox"
+# region = "us-east-1"
+# endpoint = "http://127.0.0.1:9000"   # MinIO/R2; убрать для AWS
+# prefix = "bronze"
+# path_style = true                     # обязательно для MinIO
+# staging_dir = "./.staging"            # локальный буфер медиа до загрузки
+
 [concurrency]
 meta_workers = 4        # параллельных задач метаданных на платформу
 media_workers = 2       # параллельных скачиваний

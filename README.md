@@ -56,6 +56,7 @@ discovery/<run_id>.jsonl      # провенанс discovery
 | `detox-parser-core`      | типы, трейты-границы, конфиг, ошибки (контракт) |
 | `detox-parser-manifest`  | резюмируемое состояние в SQLite                 |
 | `detox-parser-store`     | Bronze-sink на ФС                               |
+| `detox-parser-store-s3`  | Bronze-sink в S3/MinIO/R2 (data lake)           |
 | `detox-parser-ytdlp`     | async-обёртка над yt-dlp + нормализация          |
 | `detox-parser-youtube`   | YouTube discovery                               |
 | `detox-parser-tiktok`    | TikTok discovery                                |
@@ -67,9 +68,10 @@ discovery/<run_id>.jsonl      # провенанс discovery
 
 - **Сейчас (MVP):** parquet + JSON + медиа на локальном диске; запросы — **DuckDB**
   (`SELECT * FROM 'export/normalized.parquet'`), как и в `ml` (Polars/DuckDB).
-- **Шеринг/масштаб:** тот же partition-layout в объектном хранилище
-  (**S3 / MinIO / GCS**) — `platform=…/domain=…/dt=…/part.parquet`; DuckDB/Polars
-  читают из S3 напрямую (data lake). Медиа — только в объектное хранилище, не в БД.
+- **Шеринг/масштаб:** `backend = "s3"` в `[storage]` → Bronze (raw/normalized/
+  медиа) пишется в **S3 / MinIO / R2** с той же раскладкой ключей, что на ФС;
+  DuckDB/Polars читают из S3 напрямую (data lake). Креды — из env. Медиа сначала
+  во временный `staging_dir`, затем загружается и локальная копия удаляется.
 - **Версионирование/upsert:** при росте — table format **Apache Iceberg** или
   **Delta Lake** поверх parquet (ACID, schema evolution, time-travel).
 - **Состояние/манифест:** локально SQLite; для распределённого сбора — Postgres.

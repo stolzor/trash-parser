@@ -13,6 +13,7 @@ authors = ["stolzor"]
 detox-parser-core = { path = "crates/core" }
 detox-parser-manifest = { path = "crates/manifest" }
 detox-parser-store = { path = "crates/store" }
+detox-parser-store-s3 = { path = "crates/store-s3" }
 detox-parser-ytdlp = { path = "crates/ytdlp" }
 detox-parser-youtube = { path = "crates/youtube" }
 detox-parser-tiktok = { path = "crates/tiktok" }

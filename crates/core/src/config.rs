@@ -18,6 +18,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub discovery: DiscoveryConfig,
 
+    /// Куда писать Bronze: локальная ФС или объектное хранилище.
+    #[serde(default)]
+    pub storage: StorageConfig,
+
     /// Квоты медиа по доменам (балансировка выборки short/long).
     #[serde(default)]
     pub quota: QuotaConfig,
@@ -29,6 +33,47 @@ pub struct AppConfig {
     /// Источники сбора (Stage 0).
     #[serde(default)]
     pub seeds: Vec<Seed>,
+}
+
+/// Выбор бэкенда хранилища Bronze.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StorageConfig {
+    pub backend: StorageBackend,
+    pub s3: S3Config,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageBackend {
+    #[default]
+    Fs,
+    S3,
+}
+
+/// Параметры объектного хранилища. Креды — из env (AWS_ACCESS_KEY_ID/SECRET).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct S3Config {
+    pub bucket: String,
+    pub region: String,
+    pub endpoint: Option<String>,
+    pub prefix: String,
+    pub path_style: bool,
+    pub staging_dir: String,
+}
+
+impl Default for S3Config {
+    fn default() -> Self {
+        Self {
+            bucket: String::new(),
+            region: "us-east-1".into(),
+            endpoint: None,
+            prefix: String::new(),
+            path_style: false,
+            staging_dir: "./.staging".into(),
+        }
+    }
 }
 
 /// Квоты на скачивание медиа по доменам. `None` = без ограничения.

@@ -4,12 +4,13 @@
 //! State machine на видео: Discovered → MetaFetched → Gated → MediaFetched.
 //! Идемпотентность и резюмируемость обеспечивает манифест.
 
-use detox_parser_core::config::{AppConfig, DiscoveryConfig};
+use detox_parser_core::config::{AppConfig, DiscoveryConfig, StorageBackend};
 use detox_parser_core::error::{Error, Result};
 use detox_parser_core::traits::{Discoverer, Extractor, MediaFetcher, Sink};
 use detox_parser_core::types::*;
 use detox_parser_manifest::{Manifest, Status};
 use detox_parser_store::FsStore;
+use detox_parser_store_s3::{S3Settings, S3Store};
 use detox_parser_ytdlp::{now_unix, CookieOpts, YtDlp};
 use futures::stream::{self, StreamExt};
 use governor::{Quota, RateLimiter};
@@ -38,20 +39,41 @@ struct Backend {
 pub struct Pipeline {
     cfg: AppConfig,
     manifest: Arc<Manifest>,
-    store: Arc<FsStore>,
+    store: Arc<dyn Sink>,
     backends: Vec<(Platform, Backend)>,
     max_retries: u32,
 }
 
 impl Pipeline {
     pub async fn new(cfg: AppConfig) -> Result<Self> {
-        let store = Arc::new(FsStore::new(&cfg.out_root).await?);
+        // out_root нужен под манифест (SQLite локальный) в любом бэкенде
+        tokio::fs::create_dir_all(&cfg.out_root).await?;
+        let store: Arc<dyn Sink> = match cfg.storage.backend {
+            StorageBackend::Fs => Arc::new(FsStore::new(&cfg.out_root).await?),
+            StorageBackend::S3 => {
+                let s = &cfg.storage.s3;
+                if s.bucket.is_empty() {
+                    return Err(Error::Config("storage.s3.bucket пуст".into()));
+                }
+                Arc::new(
+                    S3Store::new(S3Settings {
+                        bucket: s.bucket.clone(),
+                        region: s.region.clone(),
+                        endpoint: s.endpoint.clone(),
+                        prefix: s.prefix.clone(),
+                        path_style: s.path_style,
+                        staging_dir: s.staging_dir.clone(),
+                    })
+                    .await?,
+                )
+            }
+        };
         let manifest = Arc::new(Manifest::open(
             std::path::Path::new(&cfg.out_root).join("manifest.sqlite"),
         )?);
 
         let rps = NonZeroU32::new(cfg.concurrency.requests_per_sec.max(1)).unwrap();
-        let media_dir = store.media_dir();
+        let media_dir = store.staging_dir();
         let cookies = CookieOpts {
             from_browser: cfg.ytdlp.cookies_from_browser.clone(),
             file: cfg.ytdlp.cookies_file.clone(),
@@ -149,7 +171,7 @@ impl Pipeline {
                             retry(max_retries, || backend_ex.metadata(&video, &url)).await;
                         match res {
                             Ok(mut extract) => {
-                                if let Err(e) = persist_meta(&store, &manifest, &mut extract, &gate).await {
+                                if let Err(e) = persist_meta(store.as_ref(), &manifest, &mut extract, &gate).await {
                                     warn!(%video, error = %e, "persist meta failed");
                                 }
                             }
@@ -179,7 +201,7 @@ impl Pipeline {
             return Ok(());
         }
         let opts = self.cfg.media.to_opts();
-        let media_dir = self.store.media_dir();
+        let media_dir = self.store.staging_dir();
         let quota = self.cfg.quota.clone();
         let long_windows = self.cfg.media.long_windows;
         let window_secs = self.cfg.media.long_window_seconds;
@@ -345,7 +367,7 @@ impl Pipeline {
         let video = VideoId::new(platform, id);
         let backend = self.backend(platform);
         let mut extract = backend.extractor.metadata(&video, url).await?;
-        persist_meta(&self.store, &self.manifest, &mut extract, &self.cfg.discovery).await?;
+        persist_meta(self.store.as_ref(), &self.manifest, &mut extract, &self.cfg.discovery).await?;
         Ok(extract.normalized)
     }
 
@@ -364,7 +386,7 @@ fn passes_gate(v: &NormalizedVideo, cfg: &DiscoveryConfig) -> bool {
 
 /// Записать raw + normalized и проставить статусы.
 async fn persist_meta(
-    store: &FsStore,
+    store: &dyn Sink,
     manifest: &Manifest,
     extract: &mut RawExtract,
     gate: &DiscoveryConfig,

@@ -22,16 +22,6 @@ impl FsStore {
         Ok(Self { root })
     }
 
-    /// Каталог для медиа — сюда yt-dlp пишет файлы напрямую.
-    pub fn media_dir(&self) -> PathBuf {
-        self.root.join("raw/videos")
-    }
-
-    /// Путь лога discovery-провенанса для текущего прогона.
-    pub fn discovery_log(&self, run_id: &str) -> PathBuf {
-        self.root.join("discovery").join(format!("{run_id}.jsonl"))
-    }
-
     async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         // пишем во временный и переименовываем — raw остаётся консистентным
         let tmp = path.with_extension("tmp");
@@ -65,8 +55,16 @@ impl Sink for FsStore {
     }
 
     async fn put_media(&self, artifact: &MediaArtifact) -> Result<()> {
-        // yt-dlp уже скачал в media_dir(); фиксируем факт наличия файла.
+        // yt-dlp уже скачал в staging_dir() (= финальное место); просто фиксируем.
         debug!(path = %artifact.path, bytes = artifact.bytes, "media present");
         Ok(())
+    }
+
+    fn staging_dir(&self) -> PathBuf {
+        self.root.join("raw/videos")
+    }
+
+    fn discovery_log(&self, run_id: &str) -> PathBuf {
+        self.root.join("discovery").join(format!("{run_id}.jsonl"))
     }
 }
