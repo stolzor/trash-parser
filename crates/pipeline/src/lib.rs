@@ -153,12 +153,12 @@ impl Pipeline {
                             }
                             // недоступное видео — терминально, исключаем из выборки
                             Err(Error::Unavailable(msg)) => {
-                                let _ = manifest.mark_meta(&video, Status::Filtered, None, Some(&msg), now_unix());
+                                let _ = manifest.mark_meta(&video, Status::Filtered, None, None, Some(&msg), now_unix());
                                 let _ = manifest.mark_media(&video, Status::Skipped, None, None, now_unix());
                             }
                             Err(e) => {
                                 warn!(%video, error = %e, "meta failed");
-                                let _ = manifest.mark_meta(&video, Status::Failed, None, Some(&e.to_string()), now_unix());
+                                let _ = manifest.mark_meta(&video, Status::Failed, None, None, Some(&e.to_string()), now_unix());
                             }
                         }
                     }
@@ -220,11 +220,69 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Полный прогон: discover → harvest → media.
+    // --- Многохоповое расширение (анти-survivorship-bias) ------------------
+
+    /// Один хоп: из каналов уже собранных видео тянем их полные аплоады.
+    /// Возвращает число новых кандидатов. Пока только YouTube (channel_id = UC).
+    pub async fn expand(&self, hop: u32) -> Result<usize> {
+        let cfg = &self.cfg.discovery;
+        let mut new_total = 0usize;
+        for (platform, backend) in &self.backends {
+            // у TikTok id канала ненадёжен как @handle — расширение пропускаем
+            if *platform != Platform::Youtube {
+                continue;
+            }
+            let channels =
+                self.manifest.unexpanded_channels(*platform, cfg.max_channels_per_hop)?;
+            if channels.is_empty() {
+                continue;
+            }
+            info!(%platform, channels = channels.len(), hop, "expand: pulling full channel uploads");
+            for channel in channels {
+                backend.limiter.until_ready().await;
+                let seed = Seed {
+                    platform: *platform,
+                    kind: SeedKind::Channel,
+                    value: channel.clone(),
+                    domain_hint: None,
+                    target: Some(cfg.expand_channel_videos),
+                };
+                match backend.discoverer.discover(&seed).await {
+                    Ok(cands) => {
+                        for c in &cands {
+                            if self.manifest.upsert_candidate(c)? {
+                                new_total += 1;
+                            }
+                        }
+                    }
+                    Err(e) => warn!(%channel, error = %e, "expand discover failed"),
+                }
+                self.manifest.mark_channel_expanded(*platform, &channel, hop, now_unix())?;
+            }
+        }
+        Ok(new_total)
+    }
+
+    /// Цикл расширения: до `max_hops` хопов, каждый раз добирая метаданные новых.
+    /// Останавливается раньше, если хоп не дал новых кандидатов.
+    pub async fn expand_loop(&self) -> Result<()> {
+        for hop in 1..=self.cfg.discovery.max_hops {
+            let added = self.expand(hop).await?;
+            info!(hop, added, "expansion hop done");
+            if added == 0 {
+                break;
+            }
+            self.harvest().await?;
+        }
+        Ok(())
+    }
+
+    /// Полный прогон: discover → harvest → expand* → media.
     pub async fn run(&self, run_id: &str) -> Result<()> {
         let new = self.discover(run_id).await?;
         info!(new_candidates = new, "discovery done");
         self.harvest().await?;
+        self.expand_loop().await?;
         self.fetch_media().await?;
         Ok(())
     }
@@ -268,7 +326,15 @@ async fn persist_meta(
     store.put_normalized(&extract.normalized).await?;
 
     let now = now_unix();
-    manifest.mark_meta(&extract.video, Status::Ok, Some(&raw_ref.path), None, now)?;
+    let channel_id = extract.normalized.channel.id.clone();
+    manifest.mark_meta(
+        &extract.video,
+        Status::Ok,
+        Some(&raw_ref.path),
+        channel_id.as_deref(),
+        None,
+        now,
+    )?;
 
     // gate решает, качать ли медиа
     if gate.gate_before_media && !passes_gate(&extract.normalized, gate) {

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS videos (
     discovered_at INTEGER NOT NULL,
     source        TEXT,
     query         TEXT,
+    channel_id    TEXT,                             -- заполняется после harvest (для expand)
     status_meta   TEXT NOT NULL DEFAULT 'pending',  -- pending|ok|failed|filtered
     status_media  TEXT NOT NULL DEFAULT 'pending',  -- pending|ok|failed|skipped
     retries_meta  INTEGER NOT NULL DEFAULT 0,
@@ -32,6 +33,14 @@ CREATE TABLE IF NOT EXISTS seeds (
     kind     TEXT NOT NULL,
     value    TEXT NOT NULL,
     ts       INTEGER NOT NULL
+);
+-- какие каналы уже расширены (дедуп многохопа против survivorship bias)
+CREATE TABLE IF NOT EXISTS expanded_channels (
+    platform   TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    hop        INTEGER NOT NULL,
+    ts         INTEGER NOT NULL,
+    PRIMARY KEY (platform, channel_id)
 );
 CREATE INDEX IF NOT EXISTS idx_videos_meta  ON videos(platform, status_meta);
 CREATE INDEX IF NOT EXISTS idx_videos_media ON videos(platform, status_media);
@@ -71,6 +80,8 @@ impl Manifest {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path).map_err(map_err)?;
         conn.execute_batch(SCHEMA).map_err(map_err)?;
+        // миграция старых БД: добавить channel_id, если его нет (ошибку дубля глотаем)
+        let _ = conn.execute("ALTER TABLE videos ADD COLUMN channel_id TEXT", []);
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -115,16 +126,52 @@ impl Manifest {
         v: &VideoId,
         status: Status,
         meta_path: Option<&str>,
+        channel_id: Option<&str>,
         err: Option<&str>,
         now: i64,
     ) -> Result<()> {
         self.lock()
             .execute(
                 "UPDATE videos SET status_meta=?3, meta_path=COALESCE(?4, meta_path),
-                    last_error=?5, updated_at=?6,
+                    channel_id=COALESCE(?7, channel_id), last_error=?5, updated_at=?6,
                     retries_meta = retries_meta + (CASE WHEN ?3='failed' THEN 1 ELSE 0 END)
                  WHERE platform=?1 AND id=?2",
-                params![v.platform.as_str(), v.id, status.as_str(), meta_path, err, now],
+                params![v.platform.as_str(), v.id, status.as_str(), meta_path, err, now, channel_id],
+            )
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    /// Каналы собранных видео, которые ещё не расширяли (для многохопа).
+    pub fn unexpanded_channels(&self, platform: Platform, limit: usize) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT channel_id FROM videos
+                 WHERE platform=?1 AND status_meta='ok' AND channel_id IS NOT NULL
+                   AND channel_id NOT IN
+                       (SELECT channel_id FROM expanded_channels WHERE platform=?1)
+                 LIMIT ?2",
+            )
+            .map_err(map_err)?;
+        let rows = stmt
+            .query_map(params![platform.as_str(), limit as i64], |r| r.get::<_, String>(0))
+            .map_err(map_err)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(map_err)
+    }
+
+    pub fn mark_channel_expanded(
+        &self,
+        platform: Platform,
+        channel_id: &str,
+        hop: u32,
+        now: i64,
+    ) -> Result<()> {
+        self.lock()
+            .execute(
+                "INSERT OR IGNORE INTO expanded_channels (platform, channel_id, hop, ts)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![platform.as_str(), channel_id, hop, now],
             )
             .map_err(map_err)?;
         Ok(())
@@ -199,6 +246,15 @@ impl Manifest {
         rows.collect::<std::result::Result<_, _>>().map_err(map_err)
     }
 
+    #[cfg(test)]
+    fn count_source(&self, like: &str) -> i64 {
+        self.lock()
+            .query_row("SELECT COUNT(*) FROM videos WHERE source LIKE ?1", [like], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    }
+
     /// Сводка `(статус_стадии, стадия, count)` для команды status.
     pub fn summary(&self) -> Result<Vec<(String, String, i64)>> {
         let conn = self.lock();
@@ -215,5 +271,73 @@ impl Manifest {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use detox_parser_core::types::{Candidate, Provenance, VideoId};
+
+    fn candidate(id: &str, source: &str) -> Candidate {
+        Candidate {
+            video: VideoId::new(Platform::Youtube, id),
+            url: format!("https://yt/{id}"),
+            provenance: Provenance {
+                source: source.into(),
+                query: None,
+                rank: None,
+                fetched_at: 0,
+                extractor: "test".into(),
+                extractor_version: None,
+            },
+        }
+    }
+
+    #[test]
+    fn dedup_on_upsert() {
+        let m = Manifest::open(":memory:").unwrap();
+        let c = candidate("v1", "query:x");
+        assert!(m.upsert_candidate(&c).unwrap(), "first insert is new");
+        assert!(!m.upsert_candidate(&c).unwrap(), "second insert is dedup'd");
+    }
+
+    #[test]
+    fn multihop_channel_expansion_tracking() {
+        let m = Manifest::open(":memory:").unwrap();
+
+        // hop 0: два видео из поиска, оба окажутся одного канала
+        for id in ["v1", "v2"] {
+            assert!(m.upsert_candidate(&candidate(id, "query:x")).unwrap());
+        }
+        let v1 = VideoId::new(Platform::Youtube, "v1");
+        let v2 = VideoId::new(Platform::Youtube, "v2");
+        m.mark_meta(&v1, Status::Ok, Some("p1"), Some("UC_channelA"), None, 1).unwrap();
+        m.mark_meta(&v2, Status::Ok, Some("p2"), Some("UC_channelA"), None, 1).unwrap();
+
+        // ровно один уникальный нерасширённый канал
+        assert_eq!(
+            m.unexpanded_channels(Platform::Youtube, 10).unwrap(),
+            vec!["UC_channelA".to_string()]
+        );
+
+        // расширяем канал → добавляем его аплоад из «хвоста» (low-engagement)
+        assert!(m.upsert_candidate(&candidate("v3", "channel:UC_channelA")).unwrap());
+        m.mark_channel_expanded(Platform::Youtube, "UC_channelA", 1, 2).unwrap();
+
+        // канал больше не возвращается (дедуп расширения — цикл сходится)
+        assert!(m.unexpanded_channels(Platform::Youtube, 10).unwrap().is_empty());
+
+        // в выборке появились видео и из поиска, и из расширения канала
+        assert_eq!(m.count_source("query:%"), 2);
+        assert_eq!(m.count_source("channel:%"), 1);
+    }
+
+    #[test]
+    fn unharvested_channels_are_not_expanded() {
+        let m = Manifest::open(":memory:").unwrap();
+        assert!(m.upsert_candidate(&candidate("v1", "query:x")).unwrap());
+        // метаданных ещё нет → channel_id неизвестен → расширять нечего
+        assert!(m.unexpanded_channels(Platform::Youtube, 10).unwrap().is_empty());
     }
 }

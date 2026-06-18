@@ -89,8 +89,13 @@ impl MediaConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiscoveryConfig {
-    /// Сколько хопов расширения (0 = только seeds). Против survivorship bias.
+    /// Сколько хопов расширения (0 = только seeds). Против survivorship bias:
+    /// на каждом хопе тянем полные аплоады каналов уже собранных видео.
     pub max_hops: u32,
+    /// Сколько аплоадов забирать с одного канала при расширении.
+    pub expand_channel_videos: usize,
+    /// Предел каналов, расширяемых за один хоп (ограничивает fan-out).
+    pub max_channels_per_hop: usize,
     /// Лёгкий gate перед скачиванием медиа (Silver в ml — авторитетный).
     pub gate_before_media: bool,
     /// Минимальная длительность ролика (с) для прохода gate.
@@ -99,6 +104,12 @@ pub struct DiscoveryConfig {
 
 impl Default for DiscoveryConfig {
     fn default() -> Self {
-        Self { max_hops: 0, gate_before_media: true, min_duration_s: 3.0 }
+        Self {
+            max_hops: 0,
+            expand_channel_videos: 30,
+            max_channels_per_hop: 50,
+            gate_before_media: true,
+            min_duration_s: 3.0,
+        }
     }
 }

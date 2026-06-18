@@ -25,7 +25,9 @@ enum Command {
     Harvest,
     /// Stage 1b: скачать медиа.
     Media,
-    /// Полный прогон: discover → harvest → media.
+    /// Расширение: тянуть полные аплоады каналов собранных видео (анти-bias).
+    Expand,
+    /// Полный прогон: discover → harvest → expand → media.
     Run,
     /// Сводка по манифесту.
     Status,
@@ -87,6 +89,7 @@ async fn main() -> Result<()> {
         }
         Command::Harvest => pipeline.harvest().await?,
         Command::Media => pipeline.fetch_media().await?,
+        Command::Expand => pipeline.expand_loop().await?,
         Command::Run => pipeline.run(&run_id()).await?,
         Command::Status => {
             println!("{:<8} {:<10} count", "stage", "status");

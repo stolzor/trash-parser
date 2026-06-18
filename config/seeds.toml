@@ -12,7 +12,9 @@ format = "worst[ext=mp4]/worst"   # capped low-res (хватает для фич
 max_filesize = "100M"
 
 [discovery]
-max_hops = 0            # 0 = только seeds; >0 = расширять по каналам/related
+max_hops = 1                # 0 = только seeds; >0 = расширять по каналам (анти-survivorship-bias)
+expand_channel_videos = 30  # сколько аплоадов брать с одного канала при расширении
+max_channels_per_hop = 50   # предел каналов за один хоп
 gate_before_media = true
 min_duration_s = 3.0
 
