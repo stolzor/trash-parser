@@ -10,8 +10,10 @@ mod innertube;
 use detox_parser_core::error::Result;
 use detox_parser_core::traits::Discoverer;
 use detox_parser_core::types::*;
+use detox_parser_core::ProxyPool;
 use detox_parser_ytdlp::{now_unix, YtDlp};
 use innertube::{InnerTube, VideoHit};
+use std::sync::Arc;
 use tracing::warn;
 
 const DEFAULT_TARGET: usize = 40;
@@ -27,8 +29,8 @@ pub struct YoutubeDiscoverer {
 }
 
 impl YoutubeDiscoverer {
-    pub fn new(yt: YtDlp) -> Self {
-        Self { it: InnerTube::new(), yt }
+    pub fn new(yt: YtDlp, proxy: Option<Arc<ProxyPool>>) -> Self {
+        Self { it: InnerTube::new(proxy), yt }
     }
 
     /// Спек для yt-dlp fallback по типу источника.

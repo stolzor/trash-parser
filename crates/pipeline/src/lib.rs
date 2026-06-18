@@ -8,6 +8,7 @@ use detox_parser_core::config::{AppConfig, DiscoveryConfig, StorageBackend};
 use detox_parser_core::error::{Error, Result};
 use detox_parser_core::traits::{Discoverer, Extractor, MediaFetcher, Sink};
 use detox_parser_core::types::*;
+use detox_parser_core::ProxyPool;
 use detox_parser_manifest::{Manifest, Status};
 use detox_parser_store::FsStore;
 use detox_parser_store_s3::{S3Settings, S3Store};
@@ -77,17 +78,29 @@ impl Pipeline {
             file: cfg.ytdlp.cookies_file.clone(),
         };
 
+        // Пул прокси (опц.) — общий для yt-dlp и нативных reqwest-клиентов.
+        let proxy: Option<Arc<ProxyPool>> = match &cfg.proxy.file {
+            Some(f) => {
+                let pool = ProxyPool::from_file(f, cfg.proxy.cooldown_base_secs)?;
+                info!(proxies = pool.len(), "proxy pool loaded");
+                Some(Arc::new(pool))
+            }
+            None => None,
+        };
+
         // Какие платформы поднимать — по присутствию в seeds (плюс всегда обе для on-demand).
         let mut backends = Vec::new();
         for platform in [Platform::Youtube, Platform::Tiktok] {
-            let yt = YtDlp::with_cookies(platform, media_dir.clone(), &cookies);
+            let yt = YtDlp::build(platform, media_dir.clone(), &cookies, proxy.clone());
             let discoverer: Arc<dyn Discoverer> = match platform {
-                Platform::Youtube => {
-                    Arc::new(detox_parser_youtube::YoutubeDiscoverer::new(yt.clone()))
-                }
-                Platform::Tiktok => {
-                    Arc::new(detox_parser_tiktok::TiktokDiscoverer::new(yt.clone()))
-                }
+                Platform::Youtube => Arc::new(detox_parser_youtube::YoutubeDiscoverer::new(
+                    yt.clone(),
+                    proxy.clone(),
+                )),
+                Platform::Tiktok => Arc::new(detox_parser_tiktok::TiktokDiscoverer::new(
+                    yt.clone(),
+                    proxy.clone(),
+                )),
             };
             backends.push((
                 platform,
@@ -148,7 +161,7 @@ impl Pipeline {
     pub async fn harvest(&self) -> Result<()> {
         for (platform, backend) in &self.backends {
             let pending =
-                self.manifest.pending_meta(*platform, self.max_retries, 100_000).await?;
+                self.manifest.claim_meta_batch(*platform, self.max_retries, 100_000, now_unix()).await?;
             if pending.is_empty() {
                 continue;
             }
@@ -219,7 +232,7 @@ impl Pipeline {
 
         for (platform, backend) in &self.backends {
             let pending =
-                self.manifest.pending_media(*platform, self.max_retries, 100_000).await?;
+                self.manifest.claim_media_batch(*platform, self.max_retries, 100_000, now_unix()).await?;
             if pending.is_empty() {
                 continue;
             }

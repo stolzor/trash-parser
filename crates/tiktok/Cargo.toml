@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 detox-parser-core = { workspace = true }
 detox-parser-ytdlp = { workspace = true }
+detox-parser-http = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }

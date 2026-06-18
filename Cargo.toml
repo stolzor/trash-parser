@@ -12,6 +12,7 @@ authors = ["stolzor"]
 # internal
 detox-parser-core = { path = "crates/core" }
 detox-parser-manifest = { path = "crates/manifest" }
+detox-parser-http = { path = "crates/http" }
 detox-parser-store = { path = "crates/store" }
 detox-parser-store-s3 = { path = "crates/store-s3" }
 detox-parser-ytdlp = { path = "crates/ytdlp" }

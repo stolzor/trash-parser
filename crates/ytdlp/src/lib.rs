@@ -7,8 +7,10 @@ mod normalize;
 use detox_parser_core::error::{Error, Result};
 use detox_parser_core::traits::{Extractor, MediaFetcher};
 use detox_parser_core::types::*;
+use detox_parser_core::ProxyPool;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::process::Command;
 use tracing::debug;
 
@@ -30,17 +32,29 @@ pub struct YtDlp {
     media_dir: PathBuf,
     /// Префикс-аргументы с куками (пусто, если не заданы).
     cookie_args: Vec<String>,
+    /// Пул прокси (ротация на каждый вызов yt-dlp).
+    proxy: Option<Arc<ProxyPool>>,
 }
 
 impl YtDlp {
     pub fn new(platform: Platform, media_dir: impl Into<PathBuf>) -> Self {
-        Self::with_cookies(platform, media_dir, &CookieOpts::default())
+        Self::build(platform, media_dir, &CookieOpts::default(), None)
     }
 
     pub fn with_cookies(
         platform: Platform,
         media_dir: impl Into<PathBuf>,
         cookies: &CookieOpts,
+    ) -> Self {
+        Self::build(platform, media_dir, cookies, None)
+    }
+
+    /// Полный конструктор: куки + опциональный пул прокси.
+    pub fn build(
+        platform: Platform,
+        media_dir: impl Into<PathBuf>,
+        cookies: &CookieOpts,
+        proxy: Option<Arc<ProxyPool>>,
     ) -> Self {
         let mut cookie_args = Vec::new();
         if let Some(browser) = &cookies.from_browser {
@@ -56,6 +70,7 @@ impl YtDlp {
             platform,
             media_dir: media_dir.into(),
             cookie_args,
+            proxy,
         }
     }
 
@@ -88,10 +103,30 @@ impl YtDlp {
     }
 
     async fn run(&self, args: &[&str]) -> Result<std::process::Output> {
-        debug!(?args, "yt-dlp");
+        let now = now_unix();
+        let proxy = self.proxy.as_ref().and_then(|p| p.acquire(now));
+
+        let mut full: Vec<&str> = self.cookie_args.iter().map(String::as_str).collect();
+        if let Some(px) = &proxy {
+            full.push("--proxy");
+            full.push(px);
+        }
+        full.extend_from_slice(args);
+        debug!(?full, "yt-dlp");
+
+        let result = self.run_inner(&full).await;
+
+        // отчёт прокси: сбой засчитываем только для сетевых причин (429/transient)
+        if let (Some(pool), Some(px)) = (&self.proxy, &proxy) {
+            let ok = !matches!(&result, Err(Error::RateLimited(_)) | Err(Error::Transient(_)));
+            pool.report(px, ok, now);
+        }
+        result
+    }
+
+    async fn run_inner(&self, full: &[&str]) -> Result<std::process::Output> {
         let out = Command::new(&self.bin)
-            .args(&self.cookie_args)
-            .args(args)
+            .args(full)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()

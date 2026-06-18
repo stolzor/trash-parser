@@ -10,7 +10,9 @@ mod web;
 use detox_parser_core::error::Result;
 use detox_parser_core::traits::Discoverer;
 use detox_parser_core::types::*;
+use detox_parser_core::ProxyPool;
 use detox_parser_ytdlp::{now_unix, YtDlp};
+use std::sync::Arc;
 use tracing::warn;
 use web::{TikTokItem, TikTokWeb};
 
@@ -27,8 +29,8 @@ pub struct TiktokDiscoverer {
 }
 
 impl TiktokDiscoverer {
-    pub fn new(yt: YtDlp) -> Self {
-        Self { web: TikTokWeb::new(), yt }
+    pub fn new(yt: YtDlp, proxy: Option<Arc<ProxyPool>>) -> Self {
+        Self { web: TikTokWeb::new(proxy), yt }
     }
 
     /// URL страницы для нативного парсинга.

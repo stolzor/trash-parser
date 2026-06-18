@@ -1259,6 +1259,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "detox-parser-http"
+version = "0.1.0"
+dependencies = [
+ "detox-parser-core",
+ "reqwest",
+ "tracing",
+]
+
+[[package]]
 name = "detox-parser-manifest"
 version = "0.1.0"
 dependencies = [
@@ -1315,6 +1324,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "detox-parser-core",
+ "detox-parser-http",
  "detox-parser-ytdlp",
  "reqwest",
  "serde_json",
@@ -1327,6 +1337,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "detox-parser-core",
+ "detox-parser-http",
  "detox-parser-ytdlp",
  "reqwest",
  "serde_json",

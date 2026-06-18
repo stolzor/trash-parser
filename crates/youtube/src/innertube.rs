@@ -5,8 +5,11 @@
 //! ответа (собираем все `videoId` и continuation-токены), а не по жёстким путям.
 
 use detox_parser_core::error::{Error, Result};
+use detox_parser_core::ProxyPool;
+use detox_parser_http::ProxyHttp;
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Публичный API-ключ WEB-клиента (захардкожен в самом youtube.com).
 const WEB_KEY: &str = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
@@ -25,22 +28,12 @@ pub struct VideoHit {
 }
 
 pub struct InnerTube {
-    http: reqwest::Client,
-}
-
-impl Default for InnerTube {
-    fn default() -> Self {
-        Self::new()
-    }
+    http: ProxyHttp,
 }
 
 impl InnerTube {
-    pub fn new() -> Self {
-        let http = reqwest::Client::builder()
-            .user_agent(UA)
-            .build()
-            .expect("reqwest client");
-        Self { http }
+    pub fn new(proxy: Option<Arc<ProxyPool>>) -> Self {
+        Self { http: ProxyHttp::new(proxy, UA) }
     }
 
     fn context() -> Value {
@@ -59,21 +52,25 @@ impl InnerTube {
         let url = format!(
             "https://www.youtube.com/youtubei/v1/{endpoint}?key={WEB_KEY}&prettyPrint=false"
         );
-        let resp = self
-            .http
-            .post(&url)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| Error::Transient(format!("innertube {endpoint}: {e}")))?;
+        let (client, proxy) = self.http.pick();
+        let resp = match client.post(&url).json(body).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                self.http.report(&proxy, false);
+                return Err(Error::Transient(format!("innertube {endpoint}: {e}")));
+            }
+        };
 
         let status = resp.status();
         if status.as_u16() == 429 {
+            self.http.report(&proxy, false);
             return Err(Error::RateLimited(format!("innertube {endpoint} 429")));
         }
         if !status.is_success() {
+            self.http.report(&proxy, false);
             return Err(Error::Transient(format!("innertube {endpoint} HTTP {status}")));
         }
+        self.http.report(&proxy, true);
         resp.json::<Value>()
             .await
             .map_err(|e| Error::Parse(format!("innertube {endpoint} JSON: {e}")))

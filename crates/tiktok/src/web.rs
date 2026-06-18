@@ -6,8 +6,11 @@
 //! XHR — туда не лезем); пробелы закрывает yt-dlp fallback в lib.rs.
 
 use detox_parser_core::error::{Error, Result};
+use detox_parser_core::ProxyPool;
+use detox_parser_http::ProxyHttp;
 use serde_json::Value;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
                   (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36";
@@ -20,41 +23,40 @@ pub struct TikTokItem {
 }
 
 pub struct TikTokWeb {
-    http: reqwest::Client,
-}
-
-impl Default for TikTokWeb {
-    fn default() -> Self {
-        Self::new()
-    }
+    http: ProxyHttp,
 }
 
 impl TikTokWeb {
-    pub fn new() -> Self {
-        let http = reqwest::Client::builder()
-            .user_agent(UA)
-            .build()
-            .expect("reqwest client");
-        Self { http }
+    pub fn new(proxy: Option<Arc<ProxyPool>>) -> Self {
+        Self { http: ProxyHttp::new(proxy, UA) }
     }
 
     /// Скачать HTML страницы и вытащить из встроенного JSON список видео.
     pub async fn discover_url(&self, url: &str, limit: usize) -> Result<Vec<TikTokItem>> {
-        let resp = self
-            .http
+        let (client, proxy) = self.http.pick();
+        let resp = match client
             .get(url)
             .header("Accept-Language", "en-US,en;q=0.9")
             .send()
             .await
-            .map_err(|e| Error::Transient(format!("tiktok GET {url}: {e}")))?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                self.http.report(&proxy, false);
+                return Err(Error::Transient(format!("tiktok GET {url}: {e}")));
+            }
+        };
 
         let status = resp.status();
         if status.as_u16() == 429 {
+            self.http.report(&proxy, false);
             return Err(Error::RateLimited(format!("tiktok {url} 429")));
         }
         if !status.is_success() {
+            self.http.report(&proxy, false);
             return Err(Error::Transient(format!("tiktok {url} HTTP {status}")));
         }
+        self.http.report(&proxy, true);
         let html = resp
             .text()
             .await

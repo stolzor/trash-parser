@@ -41,6 +41,13 @@ min_duration_s = 3.0
 short = 500    # видео ≤90с
 long = 500     # видео >90с
 
+[proxy]
+# Файл со списком прокси (один URL на строку: http://[user:pass@]host:port, socks5://…).
+# Ротация round-robin + экспоненциальный cooldown на сбойных. Применяется и к
+# yt-dlp, и к нативным reqwest-клиентам (InnerTube/TikTok-web).
+# file = "proxies.txt"
+# cooldown_base_secs = 30
+
 [ytdlp]
 # YouTube бот-гейтит скачивание медиа ("confirm you're not a bot").
 # Раскомментируй одно из двух, чтобы качать медиа:

@@ -34,9 +34,28 @@ pub struct AppConfig {
     #[serde(default)]
     pub ytdlp: YtDlpConfig,
 
+    /// Пул прокси (файл со списком + ротация с cooldown).
+    #[serde(default)]
+    pub proxy: ProxyConfig,
+
     /// Источники сбора (Stage 0).
     #[serde(default)]
     pub seeds: Vec<Seed>,
+}
+
+/// Пул прокси. `file` — список (по одному URL на строку); пусто = без прокси.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProxyConfig {
+    pub file: Option<String>,
+    /// Базовый cooldown (с) для прокси при сбое (растёт экспоненциально).
+    pub cooldown_base_secs: u64,
+}
+
+impl Default for ProxyConfig {
+    fn default() -> Self {
+        Self { file: None, cooldown_base_secs: 30 }
+    }
 }
 
 /// Манифест состояния (PostgreSQL). DSN из конфига или env DATABASE_URL.

@@ -71,6 +71,10 @@ impl Status {
 /// Строка очереди медиа: `(id, url, domain, duration_s)`.
 pub type PendingMedia = (VideoId, String, Option<String>, Option<f64>);
 
+/// Claimed-строки старше этого (с) считаются «застрявшими» и переподхватываются
+/// (воркер умер). Должно превышать максимальное время обработки одного видео.
+const CLAIM_TTL_SECS: i64 = 3600;
+
 pub struct Manifest {
     pool: PgPool,
 }
@@ -222,22 +226,36 @@ impl Manifest {
         Ok(())
     }
 
-    /// id, у которых метаданные ещё не собраны (pending или failed с запасом ретраев).
-    pub async fn pending_meta(
+    /// Атомарно захватить пачку видео для сбора метаданных и пометить их
+    /// `claimed` (FOR UPDATE SKIP LOCKED — несколько воркеров делят очередь без
+    /// пересечений). Заодно переподхватываются «застрявшие» claimed старше TTL.
+    pub async fn claim_meta_batch(
         &self,
         platform: Platform,
         max_retries: u32,
         limit: usize,
+        now: i64,
     ) -> Result<Vec<(VideoId, String)>> {
+        let stale_before = now - CLAIM_TTL_SECS;
         let rows = sqlx::query(
-            "SELECT id, url FROM videos
-             WHERE platform=$1 AND (status_meta='pending'
-                   OR (status_meta='failed' AND retries_meta < $2))
-             ORDER BY discovered_at LIMIT $3",
+            "UPDATE videos SET status_meta='claimed', updated_at=$4
+             WHERE (platform, id) IN (
+                 SELECT platform, id FROM videos
+                 WHERE platform=$1 AND (
+                     status_meta='pending'
+                     OR (status_meta='failed' AND retries_meta < $2)
+                     OR (status_meta='claimed' AND updated_at < $5)
+                 )
+                 ORDER BY discovered_at LIMIT $3
+                 FOR UPDATE SKIP LOCKED
+             )
+             RETURNING id, url",
         )
         .bind(platform.as_str())
         .bind(max_retries as i32)
         .bind(limit as i64)
+        .bind(now)
+        .bind(stale_before)
         .fetch_all(&self.pool)
         .await
         .map_err(map_err)?;
@@ -247,24 +265,35 @@ impl Manifest {
             .collect())
     }
 
-    /// id, готовые к скачиванию медиа: метаданные ok, медиа ещё нет.
-    /// Возвращает `(id, url, domain, duration_s)`.
-    pub async fn pending_media(
+    /// Атомарно захватить пачку для скачивания медиа (метаданные ok, медиа нет).
+    /// Возвращает `(id, url, domain, duration_s)`; помечает строки `claimed`.
+    pub async fn claim_media_batch(
         &self,
         platform: Platform,
         max_retries: u32,
         limit: usize,
+        now: i64,
     ) -> Result<Vec<PendingMedia>> {
+        let stale_before = now - CLAIM_TTL_SECS;
         let rows = sqlx::query(
-            "SELECT id, url, domain, duration_s FROM videos
-             WHERE platform=$1 AND status_meta='ok'
-               AND (status_media='pending'
-                    OR (status_media='failed' AND retries_media < $2))
-             ORDER BY discovered_at LIMIT $3",
+            "UPDATE videos SET status_media='claimed', updated_at=$4
+             WHERE (platform, id) IN (
+                 SELECT platform, id FROM videos
+                 WHERE platform=$1 AND status_meta='ok' AND (
+                     status_media='pending'
+                     OR (status_media='failed' AND retries_media < $2)
+                     OR (status_media='claimed' AND updated_at < $5)
+                 )
+                 ORDER BY discovered_at LIMIT $3
+                 FOR UPDATE SKIP LOCKED
+             )
+             RETURNING id, url, domain, duration_s",
         )
         .bind(platform.as_str())
         .bind(max_retries as i32)
         .bind(limit as i64)
+        .bind(now)
+        .bind(stale_before)
         .fetch_all(&self.pool)
         .await
         .map_err(map_err)?;

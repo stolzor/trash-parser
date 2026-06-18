@@ -91,7 +91,11 @@ discovery/<run_id>.jsonl      # провенанс discovery
 - **Версионирование/upsert:** при росте — table format **Apache Iceberg** или
   **Delta Lake** поверх parquet (ACID, schema evolution, time-travel).
 - **Состояние/манифест:** PostgreSQL (async sqlx) — поддерживает распределённый
-  сбор несколькими воркерами по одной очереди.
+  сбор несколькими воркерами по одной очереди (атомарный захват задач через
+  `FOR UPDATE SKIP LOCKED`, переподхват «застрявших» claimed по TTL).
+- **Прокси:** `[proxy] file = "proxies.txt"` — пул из файла, round-robin +
+  cooldown на сбойных, общий для yt-dlp и нативных reqwest-клиентов. Нужен для
+  стабильного TikTok (residential) и обхода IP-лимитов при масштабе.
 
 ## Статус / дальнейшее
 
