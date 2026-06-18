@@ -1,0 +1,310 @@
+//! Оркестратор Stage 0/1/1b. Зависит только от трейтов ядра — бэкенды
+//! (youtube/tiktok/ytdlp/store/manifest) подставляются при сборке.
+//!
+//! State machine на видео: Discovered → MetaFetched → Gated → MediaFetched.
+//! Идемпотентность и резюмируемость обеспечивает манифест.
+
+use detox_parser_core::config::{AppConfig, DiscoveryConfig};
+use detox_parser_core::error::{Error, Result};
+use detox_parser_core::traits::{Discoverer, Extractor, MediaFetcher, Sink};
+use detox_parser_core::types::*;
+use detox_parser_manifest::{Manifest, Status};
+use detox_parser_store::FsStore;
+use detox_parser_ytdlp::{now_unix, CookieOpts, YtDlp};
+use futures::stream::{self, StreamExt};
+use governor::{Quota, RateLimiter};
+use std::num::NonZeroU32;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tracing::{info, warn};
+
+type Limiter = RateLimiter<
+    governor::state::NotKeyed,
+    governor::state::InMemoryState,
+    governor::clock::DefaultClock,
+>;
+
+/// Набор бэкендов одной платформы + её rate-limiter.
+struct Backend {
+    discoverer: Arc<dyn Discoverer>,
+    extractor: Arc<dyn Extractor>,
+    media: Arc<dyn MediaFetcher>,
+    limiter: Arc<Limiter>,
+}
+
+pub struct Pipeline {
+    cfg: AppConfig,
+    manifest: Arc<Manifest>,
+    store: Arc<FsStore>,
+    backends: Vec<(Platform, Backend)>,
+    max_retries: u32,
+}
+
+impl Pipeline {
+    pub async fn new(cfg: AppConfig) -> Result<Self> {
+        let store = Arc::new(FsStore::new(&cfg.out_root).await?);
+        let manifest = Arc::new(Manifest::open(
+            std::path::Path::new(&cfg.out_root).join("manifest.sqlite"),
+        )?);
+
+        let rps = NonZeroU32::new(cfg.concurrency.requests_per_sec.max(1)).unwrap();
+        let media_dir = store.media_dir();
+        let cookies = CookieOpts {
+            from_browser: cfg.ytdlp.cookies_from_browser.clone(),
+            file: cfg.ytdlp.cookies_file.clone(),
+        };
+
+        // Какие платформы поднимать — по присутствию в seeds (плюс всегда обе для on-demand).
+        let mut backends = Vec::new();
+        for platform in [Platform::Youtube, Platform::Tiktok] {
+            let yt = YtDlp::with_cookies(platform, media_dir.clone(), &cookies);
+            let discoverer: Arc<dyn Discoverer> = match platform {
+                Platform::Youtube => {
+                    Arc::new(detox_parser_youtube::YoutubeDiscoverer::new(yt.clone()))
+                }
+                Platform::Tiktok => {
+                    Arc::new(detox_parser_tiktok::TiktokDiscoverer::new(yt.clone()))
+                }
+            };
+            backends.push((
+                platform,
+                Backend {
+                    discoverer,
+                    extractor: Arc::new(yt.clone()),
+                    media: Arc::new(yt),
+                    limiter: Arc::new(RateLimiter::direct(Quota::per_second(rps))),
+                },
+            ));
+        }
+
+        Ok(Self { cfg, manifest, store, backends, max_retries: 2 })
+    }
+
+    fn backend(&self, platform: Platform) -> &Backend {
+        &self.backends.iter().find(|(p, _)| *p == platform).expect("backend").1
+    }
+
+    // --- Stage 0 -----------------------------------------------------------
+
+    /// Прогнать все seeds, записать кандидатов в манифест (дедуп) и лог провенанса.
+    pub async fn discover(&self, run_id: &str) -> Result<usize> {
+        let mut log = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.store.discovery_log(run_id))
+            .await?;
+        let mut new_total = 0usize;
+
+        for seed in &self.cfg.seeds {
+            let backend = self.backend(seed.platform);
+            backend.limiter.until_ready().await;
+            self.manifest.record_seed(run_id, seed, now_unix())?;
+
+            match backend.discoverer.discover(seed).await {
+                Ok(candidates) => {
+                    info!(platform = %seed.platform, value = %seed.value, found = candidates.len(), "discovered");
+                    for c in &candidates {
+                        if self.manifest.upsert_candidate(c)? {
+                            new_total += 1;
+                        }
+                        let line = serde_json::to_string(c)?;
+                        log.write_all(line.as_bytes()).await?;
+                        log.write_all(b"\n").await?;
+                    }
+                }
+                Err(e) => warn!(platform = %seed.platform, value = %seed.value, error = %e, "discover failed"),
+            }
+        }
+        log.flush().await?;
+        Ok(new_total)
+    }
+
+    // --- Stage 1 -----------------------------------------------------------
+
+    /// Собрать метаданные для всех pending. Резюмируемо, идемпотентно.
+    pub async fn harvest(&self) -> Result<()> {
+        for (platform, backend) in &self.backends {
+            let pending =
+                self.manifest.pending_meta(*platform, self.max_retries, 100_000)?;
+            if pending.is_empty() {
+                continue;
+            }
+            info!(%platform, count = pending.len(), "harvest meta");
+
+            let workers = self.cfg.concurrency.meta_workers.max(1);
+            stream::iter(pending)
+                .for_each_concurrent(workers, |(video, url)| {
+                    let backend_ex = backend.extractor.clone();
+                    let limiter = backend.limiter.clone();
+                    let manifest = self.manifest.clone();
+                    let store = self.store.clone();
+                    let gate = self.cfg.discovery.clone();
+                    let max_retries = self.max_retries;
+                    async move {
+                        limiter.until_ready().await;
+                        let res =
+                            retry(max_retries, || backend_ex.metadata(&video, &url)).await;
+                        match res {
+                            Ok(mut extract) => {
+                                if let Err(e) = persist_meta(&store, &manifest, &mut extract, &gate).await {
+                                    warn!(%video, error = %e, "persist meta failed");
+                                }
+                            }
+                            // недоступное видео — терминально, исключаем из выборки
+                            Err(Error::Unavailable(msg)) => {
+                                let _ = manifest.mark_meta(&video, Status::Filtered, None, Some(&msg), now_unix());
+                                let _ = manifest.mark_media(&video, Status::Skipped, None, None, now_unix());
+                            }
+                            Err(e) => {
+                                warn!(%video, error = %e, "meta failed");
+                                let _ = manifest.mark_meta(&video, Status::Failed, None, Some(&e.to_string()), now_unix());
+                            }
+                        }
+                    }
+                })
+                .await;
+        }
+        Ok(())
+    }
+
+    // --- Stage 1b ----------------------------------------------------------
+
+    /// Скачать медиа для прошедших meta+gate.
+    pub async fn fetch_media(&self) -> Result<()> {
+        if !self.cfg.media.download {
+            info!("media download disabled");
+            return Ok(());
+        }
+        let opts = self.cfg.media.to_opts();
+        let media_dir = self.store.media_dir();
+        for (platform, backend) in &self.backends {
+            let pending =
+                self.manifest.pending_media(*platform, self.max_retries, 100_000)?;
+            if pending.is_empty() {
+                continue;
+            }
+            info!(%platform, count = pending.len(), "fetch media");
+
+            let workers = self.cfg.concurrency.media_workers.max(1);
+            stream::iter(pending)
+                .for_each_concurrent(workers, |(video, url)| {
+                    let media = backend.media.clone();
+                    let limiter = backend.limiter.clone();
+                    let manifest = self.manifest.clone();
+                    let store = self.store.clone();
+                    let opts = opts.clone();
+                    let media_dir = media_dir.clone();
+                    let max_retries = self.max_retries;
+                    async move {
+                        limiter.until_ready().await;
+                        match retry(max_retries, || media.fetch(&video, &url, &opts)).await {
+                            Ok(art) => {
+                                let _ = store.put_media(&art).await;
+                                let _ = manifest.mark_media(&video, Status::Ok, Some(&art.path), None, now_unix());
+                            }
+                            Err(Error::Unavailable(msg)) => {
+                                cleanup_partial(&media_dir, &video.id).await;
+                                let _ = manifest.mark_media(&video, Status::Skipped, None, Some(&msg), now_unix());
+                            }
+                            Err(e) => {
+                                warn!(%video, error = %e, "media failed");
+                                cleanup_partial(&media_dir, &video.id).await;
+                                let _ = manifest.mark_media(&video, Status::Failed, None, Some(&e.to_string()), now_unix());
+                            }
+                        }
+                    }
+                })
+                .await;
+        }
+        Ok(())
+    }
+
+    /// Полный прогон: discover → harvest → media.
+    pub async fn run(&self, run_id: &str) -> Result<()> {
+        let new = self.discover(run_id).await?;
+        info!(new_candidates = new, "discovery done");
+        self.harvest().await?;
+        self.fetch_media().await?;
+        Ok(())
+    }
+
+    /// Разовый парс одного URL (debug / on-demand), без discovery.
+    pub async fn single(&self, platform: Platform, url: &str) -> Result<NormalizedVideo> {
+        let id = url
+            .rsplit(['/', '=']) // грубое выделение id; нормализуется экстрактором
+            .next()
+            .unwrap_or(url)
+            .to_string();
+        let video = VideoId::new(platform, id);
+        let backend = self.backend(platform);
+        let mut extract = backend.extractor.metadata(&video, url).await?;
+        persist_meta(&self.store, &self.manifest, &mut extract, &self.cfg.discovery).await?;
+        Ok(extract.normalized)
+    }
+
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+}
+
+/// Лёгкий gate перед медиа. Авторитетный фильтр — Silver в ml.
+fn passes_gate(v: &NormalizedVideo, cfg: &DiscoveryConfig) -> bool {
+    match v.duration_s {
+        Some(d) => d >= cfg.min_duration_s,
+        None => false,
+    }
+}
+
+/// Записать raw + normalized и проставить статусы.
+async fn persist_meta(
+    store: &FsStore,
+    manifest: &Manifest,
+    extract: &mut RawExtract,
+    gate: &DiscoveryConfig,
+) -> Result<()> {
+    let raw_ref = store.put_raw(extract).await?;
+    extract.normalized.raw_path = Some(raw_ref.path.clone());
+    store.put_normalized(&extract.normalized).await?;
+
+    let now = now_unix();
+    manifest.mark_meta(&extract.video, Status::Ok, Some(&raw_ref.path), None, now)?;
+
+    // gate решает, качать ли медиа
+    if gate.gate_before_media && !passes_gate(&extract.normalized, gate) {
+        manifest.mark_media(&extract.video, Status::Skipped, None, Some("gate"), now)?;
+    }
+    Ok(())
+}
+
+/// Удалить недокачанные фрагменты (`<id>.*.part`, `.ytdl`) после провала.
+async fn cleanup_partial(media_dir: &std::path::Path, id: &str) {
+    let Ok(mut rd) = tokio::fs::read_dir(media_dir).await else { return };
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(id) && (name.ends_with(".part") || name.ends_with(".ytdl")) {
+            let _ = tokio::fs::remove_file(entry.path()).await;
+        }
+    }
+}
+
+/// Ретрай с экспоненциальной задержкой только для временных ошибок.
+async fn retry<T, Fut, F>(max: u32, mut f: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut attempt = 0u32;
+    loop {
+        match f().await {
+            Ok(v) => return Ok(v),
+            Err(e) if e.is_retryable() && attempt < max => {
+                let secs = (1u64 << attempt).min(30);
+                tokio::time::sleep(Duration::from_secs(secs)).await;
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}

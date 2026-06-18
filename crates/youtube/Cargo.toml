@@ -1,0 +1,12 @@
+[package]
+name = "detox-parser-youtube"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+detox-parser-core = { workspace = true }
+detox-parser-ytdlp = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }

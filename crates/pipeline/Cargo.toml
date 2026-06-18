@@ -1,0 +1,19 @@
+[package]
+name = "detox-parser-pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+detox-parser-core = { workspace = true }
+detox-parser-manifest = { workspace = true }
+detox-parser-store = { workspace = true }
+detox-parser-ytdlp = { workspace = true }
+detox-parser-youtube = { workspace = true }
+detox-parser-tiktok = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+governor = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

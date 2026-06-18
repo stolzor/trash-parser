@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["stolzor"]
+
+[workspace.dependencies]
+# internal
+detox-parser-core = { path = "crates/core" }
+detox-parser-manifest = { path = "crates/manifest" }
+detox-parser-store = { path = "crates/store" }
+detox-parser-ytdlp = { path = "crates/ytdlp" }
+detox-parser-youtube = { path = "crates/youtube" }
+detox-parser-tiktok = { path = "crates/tiktok" }
+detox-parser-pipeline = { path = "crates/pipeline" }
+
+# async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync", "time", "signal"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# http
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "stream"] }
+
+# storage / state
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# cli / config
+clap = { version = "4", features = ["derive", "env"] }
+
+# observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+indicatif = "0.17"
+
+# reliability
+governor = "0.6"
+backoff = { version = "0.4", features = ["tokio"] }
+
+# errors / time
+anyhow = "1"
+thiserror = "1"
+time = { version = "0.3", features = ["macros", "formatting", "parsing"] }

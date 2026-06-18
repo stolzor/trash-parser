@@ -1,0 +1,55 @@
+# Конфиг сбора. out_root по умолчанию = вход ml (Bronze падает прямо в пайплайн).
+out_root = "../ml/data"
+
+[concurrency]
+meta_workers = 4        # параллельных задач метаданных на платформу
+media_workers = 2       # параллельных скачиваний
+requests_per_sec = 2    # rate-limit на платформу
+
+[media]
+download = true
+format = "worst[ext=mp4]/worst"   # capped low-res (хватает для фич ml)
+max_filesize = "100M"
+
+[discovery]
+max_hops = 0            # 0 = только seeds; >0 = расширять по каналам/related
+gate_before_media = true
+min_duration_s = 3.0
+
+[ytdlp]
+# YouTube бот-гейтит скачивание медиа ("confirm you're not a bot").
+# Раскомментируй одно из двух, чтобы качать медиа:
+# cookies_from_browser = "chrome"          # брать куки из браузера
+# cookies_file = "/path/to/cookies.txt"    # или Netscape cookies.txt
+
+# --- Источники (Stage 0). Балансируем оба домена и оба уровня вовлечённости. ---
+
+# short-домен (high-dopamine)
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "shorts satisfying"
+domain_hint = "short"
+target = 40
+
+[[seeds]]
+platform = "tiktok"
+kind = "hashtag"
+value = "fyp"
+domain_hint = "short"
+target = 40
+
+# long-домен (low-dopamine) — полные аплоады канала против survivorship bias
+[[seeds]]
+platform = "youtube"
+kind = "channel"
+value = "@lexfridman"
+domain_hint = "long"
+target = 20
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "full podcast episode interview"
+domain_hint = "long"
+target = 30
