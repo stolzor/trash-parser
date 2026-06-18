@@ -28,7 +28,9 @@ detox-parser discover     # Stage 0: найти кандидатов по seeds 
 detox-parser harvest      # Stage 1: собрать метаданные (raw/meta/<id>.json)
 detox-parser media        # Stage 1b: скачать медиа (capped low-res)
 detox-parser run          # всё подряд: discover → harvest → media
+detox-parser expand       # тянуть полные аплоады каналов (анти-survivorship-bias)
 detox-parser status       # сводка по стадиям из манифеста
+detox-parser export       # нормализованное → parquet (для DuckDB/Polars)
 detox-parser single youtube "https://youtube.com/watch?v=..."   # разовый парс
 ```
 
@@ -57,8 +59,20 @@ discovery/<run_id>.jsonl      # провенанс discovery
 | `detox-parser-ytdlp`     | async-обёртка над yt-dlp + нормализация          |
 | `detox-parser-youtube`   | YouTube discovery                               |
 | `detox-parser-tiktok`    | TikTok discovery                                |
-| `detox-parser-pipeline`  | оркестратор стадий (concurrency, retry, gate)   |
+| `detox-parser-pipeline`  | оркестратор стадий (concurrency, retry, gate, квоты) |
+| `detox-parser-export`    | экспорт нормализованного в parquet (arrow/parquet) |
 | `detox-parser-cli`       | бинарь `detox-parser`                           |
+
+## Хранение и масштабирование
+
+- **Сейчас (MVP):** parquet + JSON + медиа на локальном диске; запросы — **DuckDB**
+  (`SELECT * FROM 'export/normalized.parquet'`), как и в `ml` (Polars/DuckDB).
+- **Шеринг/масштаб:** тот же partition-layout в объектном хранилище
+  (**S3 / MinIO / GCS**) — `platform=…/domain=…/dt=…/part.parquet`; DuckDB/Polars
+  читают из S3 напрямую (data lake). Медиа — только в объектное хранилище, не в БД.
+- **Версионирование/upsert:** при росте — table format **Apache Iceberg** или
+  **Delta Lake** поверх parquet (ACID, schema evolution, time-travel).
+- **Состояние/манифест:** локально SQLite; для распределённого сбора — Postgres.
 
 ## Статус / дальнейшее
 

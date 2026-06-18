@@ -17,6 +17,7 @@ detox-parser-ytdlp = { path = "crates/ytdlp" }
 detox-parser-youtube = { path = "crates/youtube" }
 detox-parser-tiktok = { path = "crates/tiktok" }
 detox-parser-pipeline = { path = "crates/pipeline" }
+detox-parser-export = { path = "crates/export" }
 
 # async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync", "time", "signal"] }

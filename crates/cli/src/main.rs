@@ -31,6 +31,12 @@ enum Command {
     Run,
     /// Сводка по манифесту.
     Status,
+    /// Экспорт нормализованных записей в parquet (для аналитики/DuckDB).
+    Export {
+        /// Путь к parquet (по умолчанию <out_root>/export/normalized.parquet).
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Разовый парс одного URL.
     Single {
         #[arg(value_enum)]
@@ -80,6 +86,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let cfg = load_config(&cli.config)?;
+    let out_root = cfg.out_root.clone();
     let pipeline = Pipeline::new(cfg).await?;
 
     match cli.command {
@@ -96,6 +103,16 @@ async fn main() -> Result<()> {
             for (stage, status, count) in pipeline.manifest().summary()? {
                 println!("{stage:<8} {status:<10} {count}");
             }
+        }
+        Command::Export { out } => {
+            let out_path = out.unwrap_or_else(|| {
+                format!("{}/export/normalized.parquet", out_root.trim_end_matches('/'))
+            });
+            let n = detox_parser_export::export_parquet(
+                std::path::Path::new(&out_root),
+                std::path::Path::new(&out_path),
+            )?;
+            println!("экспортировано строк: {n} → {out_path}");
         }
         Command::Single { platform, url } => {
             let v = pipeline.single(platform.into(), &url).await?;
