@@ -88,6 +88,14 @@ impl Pipeline {
             None => None,
         };
 
+        // Cookie для нативного TikTok (готовая строка или из Netscape cookies.txt).
+        let tt_cookie = cfg.tiktok.cookie.clone().or_else(|| {
+            cfg.tiktok
+                .cookie_file
+                .as_ref()
+                .and_then(|f| detox_parser_tiktok::cookie_header_from_file(f))
+        });
+
         // Какие платформы поднимать — по присутствию в seeds (плюс всегда обе для on-demand).
         let mut backends = Vec::new();
         for platform in [Platform::Youtube, Platform::Tiktok] {
@@ -100,6 +108,7 @@ impl Pipeline {
                 Platform::Tiktok => Arc::new(detox_parser_tiktok::TiktokDiscoverer::new(
                     yt.clone(),
                     proxy.clone(),
+                    tt_cookie.clone(),
                 )),
             };
             backends.push((

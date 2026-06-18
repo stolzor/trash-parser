@@ -24,22 +24,23 @@ pub struct TikTokItem {
 
 pub struct TikTokWeb {
     http: ProxyHttp,
+    /// Готовая строка заголовка Cookie (msToken/ttwid/…), если задана.
+    cookie: Option<String>,
 }
 
 impl TikTokWeb {
-    pub fn new(proxy: Option<Arc<ProxyPool>>) -> Self {
-        Self { http: ProxyHttp::new(proxy, UA) }
+    pub fn new(proxy: Option<Arc<ProxyPool>>, cookie: Option<String>) -> Self {
+        Self { http: ProxyHttp::new(proxy, UA), cookie }
     }
 
     /// Скачать HTML страницы и вытащить из встроенного JSON список видео.
     pub async fn discover_url(&self, url: &str, limit: usize) -> Result<Vec<TikTokItem>> {
         let (client, proxy) = self.http.pick();
-        let resp = match client
-            .get(url)
-            .header("Accept-Language", "en-US,en;q=0.9")
-            .send()
-            .await
-        {
+        let mut req = client.get(url).header("Accept-Language", "en-US,en;q=0.9");
+        if let Some(c) = &self.cookie {
+            req = req.header("Cookie", c);
+        }
+        let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
                 self.http.report(&proxy, false);

@@ -38,9 +38,22 @@ pub struct AppConfig {
     #[serde(default)]
     pub proxy: ProxyConfig,
 
+    /// Cookie для нативного TikTok-клиента (msToken/ttwid против бот-стен).
+    #[serde(default)]
+    pub tiktok: TiktokConfig,
+
     /// Источники сбора (Stage 0).
     #[serde(default)]
     pub seeds: Vec<Seed>,
+}
+
+/// Cookie для нативного TikTok-discovery. `cookie` — готовая строка заголовка
+/// (`msToken=…; ttwid=…; sessionid=…`), либо `cookie_file` — Netscape cookies.txt.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TiktokConfig {
+    pub cookie: Option<String>,
+    pub cookie_file: Option<String>,
 }
 
 /// Пул прокси. `file` — список (по одному URL на строку); пусто = без прокси.

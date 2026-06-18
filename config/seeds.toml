@@ -48,6 +48,12 @@ long = 500     # видео >90с
 # file = "proxies.txt"
 # cooldown_base_secs = 30
 
+[tiktok]
+# Cookie для нативного TikTok-discovery (msToken/ttwid повышают шанс обойти бот-стену).
+# Либо готовая строка заголовка, либо Netscape cookies.txt (как у yt-dlp).
+# cookie = "msToken=...; ttwid=...; sessionid=..."
+# cookie_file = "tiktok_cookies.txt"
+
 [ytdlp]
 # YouTube бот-гейтит скачивание медиа ("confirm you're not a bot").
 # Раскомментируй одно из двух, чтобы качать медиа:

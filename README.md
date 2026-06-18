@@ -107,7 +107,8 @@ discovery/<run_id>.jsonl      # провенанс discovery
 - **TikTok discovery** — best-effort: GET страницы тега/юзера → встроенный
   `__UNIVERSAL_DATA_FOR_REHYDRATION__` JSON (без подписи запросов), с fallback
   на `yt-dlp`. TikTok жёстко бот-гейтит: нативный путь возвращает items только
-  когда страница их SSR-ит; для надёжности в проде нужен residential-IP /
-  `msToken`-cookie, либо рабочий yt-dlp app-info. Логика парсинга покрыта тестами.
+  когда страница их SSR-ит. Для надёжности задай `[tiktok] cookie`
+  (`msToken=…; ttwid=…`) или `cookie_file` (Netscape cookies.txt) — cookie
+  прикладывается заголовком к запросу — плюс residential-прокси. Покрыто тестами.
 - TODO: скачивание только нужных окон для длинных видео; партиционированный
   parquet + S3 `Sink`; подписанный TikTok XHR для пагинации.
