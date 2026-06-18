@@ -172,11 +172,14 @@ pub struct Concurrency {
     pub media_workers: usize,
     /// Запросов в секунду на платформу (rate-limit).
     pub requests_per_sec: u32,
+    /// Сколько задач захватывать за один claim. Маленький батч → несколько
+    /// воркеров/процессов реально делят очередь (а не первый забирает всё).
+    pub claim_batch: usize,
 }
 
 impl Default for Concurrency {
     fn default() -> Self {
-        Self { meta_workers: 4, media_workers: 2, requests_per_sec: 2 }
+        Self { meta_workers: 4, media_workers: 2, requests_per_sec: 2, claim_batch: 50 }
     }
 }
 

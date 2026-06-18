@@ -18,3 +18,12 @@ futures = { workspace = true }
 governor = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+toml = { workspace = true }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+detox-parser-core = { workspace = true }
+detox-parser-manifest = { workspace = true }
+detox-parser-youtube = { workspace = true }
+detox-parser-ytdlp = { workspace = true }

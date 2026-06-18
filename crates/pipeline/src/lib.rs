@@ -167,47 +167,52 @@ impl Pipeline {
     // --- Stage 1 -----------------------------------------------------------
 
     /// Собрать метаданные для всех pending. Резюмируемо, идемпотентно.
+    /// Захват идёт батчами в цикле — несколько воркеров/процессов делят очередь.
     pub async fn harvest(&self) -> Result<()> {
+        let batch = self.cfg.concurrency.claim_batch.max(1);
+        let workers = self.cfg.concurrency.meta_workers.max(1);
         for (platform, backend) in &self.backends {
-            let pending =
-                self.manifest.claim_meta_batch(*platform, self.max_retries, 100_000, now_unix()).await?;
-            if pending.is_empty() {
-                continue;
-            }
-            info!(%platform, count = pending.len(), "harvest meta");
+            loop {
+                let pending = self
+                    .manifest
+                    .claim_meta_batch(*platform, self.max_retries, batch, now_unix())
+                    .await?;
+                if pending.is_empty() {
+                    break;
+                }
+                info!(%platform, count = pending.len(), "harvest meta batch");
 
-            let workers = self.cfg.concurrency.meta_workers.max(1);
-            stream::iter(pending)
-                .for_each_concurrent(workers, |(video, url)| {
-                    let backend_ex = backend.extractor.clone();
-                    let limiter = backend.limiter.clone();
-                    let manifest = self.manifest.clone();
-                    let store = self.store.clone();
-                    let gate = self.cfg.discovery.clone();
-                    let max_retries = self.max_retries;
-                    async move {
-                        limiter.until_ready().await;
-                        let res =
-                            retry(max_retries, || backend_ex.metadata(&video, &url)).await;
-                        match res {
-                            Ok(mut extract) => {
-                                if let Err(e) = persist_meta(store.as_ref(), &manifest, &mut extract, &gate).await {
-                                    warn!(%video, error = %e, "persist meta failed");
+                stream::iter(pending)
+                    .for_each_concurrent(workers, |(video, url)| {
+                        let backend_ex = backend.extractor.clone();
+                        let limiter = backend.limiter.clone();
+                        let manifest = self.manifest.clone();
+                        let store = self.store.clone();
+                        let gate = self.cfg.discovery.clone();
+                        let max_retries = self.max_retries;
+                        async move {
+                            limiter.until_ready().await;
+                            let res = retry(max_retries, || backend_ex.metadata(&video, &url)).await;
+                            match res {
+                                Ok(mut extract) => {
+                                    if let Err(e) = persist_meta(store.as_ref(), &manifest, &mut extract, &gate).await {
+                                        warn!(%video, error = %e, "persist meta failed");
+                                    }
+                                }
+                                // недоступное видео — терминально, исключаем из выборки
+                                Err(Error::Unavailable(msg)) => {
+                                    let _ = manifest.mark_meta(&video, Status::Filtered, None, None, None, None, Some(&msg), now_unix()).await;
+                                    let _ = manifest.mark_media(&video, Status::Skipped, None, None, now_unix()).await;
+                                }
+                                Err(e) => {
+                                    warn!(%video, error = %e, "meta failed");
+                                    let _ = manifest.mark_meta(&video, Status::Failed, None, None, None, None, Some(&e.to_string()), now_unix()).await;
                                 }
                             }
-                            // недоступное видео — терминально, исключаем из выборки
-                            Err(Error::Unavailable(msg)) => {
-                                let _ = manifest.mark_meta(&video, Status::Filtered, None, None, None, None, Some(&msg), now_unix()).await;
-                                let _ = manifest.mark_media(&video, Status::Skipped, None, None, now_unix()).await;
-                            }
-                            Err(e) => {
-                                warn!(%video, error = %e, "meta failed");
-                                let _ = manifest.mark_meta(&video, Status::Failed, None, None, None, None, Some(&e.to_string()), now_unix()).await;
-                            }
                         }
-                    }
-                })
-                .await;
+                    })
+                    .await;
+            }
         }
         Ok(())
     }
@@ -239,15 +244,19 @@ impl Pipeline {
                 .collect(),
         );
 
+        let workers = self.cfg.concurrency.media_workers.max(1);
+        let batch = self.cfg.concurrency.claim_batch.max(1);
         for (platform, backend) in &self.backends {
-            let pending =
-                self.manifest.claim_media_batch(*platform, self.max_retries, 100_000, now_unix()).await?;
+            loop {
+            let pending = self
+                .manifest
+                .claim_media_batch(*platform, self.max_retries, batch, now_unix())
+                .await?;
             if pending.is_empty() {
-                continue;
+                break;
             }
-            info!(%platform, count = pending.len(), "fetch media");
+            info!(%platform, count = pending.len(), "fetch media batch");
 
-            let workers = self.cfg.concurrency.media_workers.max(1);
             stream::iter(pending)
                 .for_each_concurrent(workers, |(video, url, domain, duration)| {
                     let media = backend.media.clone();
@@ -306,6 +315,7 @@ impl Pipeline {
                     }
                 })
                 .await;
+            }
         }
         Ok(())
     }
