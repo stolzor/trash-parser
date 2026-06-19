@@ -12,7 +12,7 @@ use detox_parser_core::ProxyPool;
 use detox_parser_manifest::{Manifest, Status};
 use detox_parser_store::FsStore;
 use detox_parser_store_s3::{S3Settings, S3Store};
-use detox_parser_ytdlp::{now_unix, CookieOpts, YtDlp};
+use detox_parser_ytdlp::{ffmpeg_available, now_unix, CookieOpts, YtDlp};
 use futures::stream::{self, StreamExt};
 use governor::{Quota, RateLimiter};
 use std::collections::HashMap;
@@ -47,6 +47,15 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub async fn new(cfg: AppConfig) -> Result<Self> {
+        // префлайт: ffmpeg нужен yt-dlp для медиа (окна/муксинг), но не для метаданных
+        if cfg.media.download && !ffmpeg_available() {
+            warn!(
+                "ffmpeg не найден в PATH — оконное скачивание длинных видео и муксинг \
+                 не будут работать (метаданные и discovery — ок). Установи ffmpeg, либо \
+                 задай [media] long_windows = 0 / download = false (или FFMPEG_BIN)."
+            );
+        }
+
         // out_root нужен под манифест (SQLite локальный) в любом бэкенде
         tokio::fs::create_dir_all(&cfg.out_root).await?;
         let store: Arc<dyn Sink> = match cfg.storage.backend {

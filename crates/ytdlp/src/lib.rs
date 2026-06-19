@@ -276,6 +276,20 @@ impl YtDlp {
     }
 }
 
+/// Доступен ли `ffmpeg` в PATH. yt-dlp дёргает его для оконного скачивания
+/// (`--download-sections`) и муксинга — без него media-стадия частично сломается,
+/// но метаданные/discovery работают. Бинарь можно переопределить env `FFMPEG_BIN`.
+pub fn ffmpeg_available() -> bool {
+    let bin = std::env::var("FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".into());
+    std::process::Command::new(bin)
+        .arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Текущее unix-время. Изолировано здесь, чтобы ядро оставалось без часов.
 pub fn now_unix() -> i64 {
     std::time::SystemTime::now()
