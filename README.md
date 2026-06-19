@@ -176,8 +176,9 @@ parser (Rust, N воркеров)
 ### Единственное ограничение
 **Живой TikTok** требует residential-прокси + валидный `msToken`-cookie — без них
 и нативный SSR, и yt-dlp упираются в бот-стены TikTok. Это внешний фактор, не код:
-задай `[tiktok] cookie`/`cookie_file` + `[proxy] file` — нативный путь заработает
-без правок.
+задай куки (`[tiktok] cookie` / `cookie_file` / `cookies_from_browser = "chrome"`
+— авто-экспорт куки браузера через yt-dlp, покрывает оба пути) + `[proxy] file`
+(residential) — заработает без правок.
 
 ### Опционально на будущее
 - Подписанный TikTok XHR для пагинации глубже первой страницы.

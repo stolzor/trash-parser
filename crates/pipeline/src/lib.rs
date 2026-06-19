@@ -97,13 +97,35 @@ impl Pipeline {
             None => None,
         };
 
-        // Cookie для нативного TikTok (готовая строка или из Netscape cookies.txt).
-        let tt_cookie = cfg.tiktok.cookie.clone().or_else(|| {
+        // Cookie для нативного TikTok: готовая строка > Netscape-файл > авто-экспорт
+        // куки браузера через yt-dlp (reqwest сам куки браузера читать не умеет).
+        let mut tt_cookie = cfg.tiktok.cookie.clone().or_else(|| {
             cfg.tiktok
                 .cookie_file
                 .as_ref()
                 .and_then(|f| detox_parser_tiktok::cookie_header_from_file(f))
         });
+        if tt_cookie.is_none() {
+            if let Some(browser) = &cfg.tiktok.cookies_from_browser {
+                let tmp = std::path::Path::new(&cfg.out_root).join(".tiktok_cookies.txt");
+                let yt = YtDlp::with_cookies(Platform::Tiktok, media_dir.clone(), &cookies);
+                match yt
+                    .export_cookies(browser, &tmp, "https://www.tiktok.com/@tiktok")
+                    .await
+                {
+                    Ok(()) => {
+                        tt_cookie = detox_parser_tiktok::cookie_header_from_file(
+                            &tmp.to_string_lossy(),
+                        );
+                        match &tt_cookie {
+                            Some(_) => info!(%browser, "tiktok: куки браузера экспортированы"),
+                            None => warn!("tiktok: в куках браузера нет домена tiktok — залогинься на tiktok.com"),
+                        }
+                    }
+                    Err(e) => warn!(error = %e, "tiktok: экспорт куки браузера не удался"),
+                }
+            }
+        }
 
         // Какие платформы поднимать — по присутствию в seeds (плюс всегда обе для on-demand).
         let mut backends = Vec::new();

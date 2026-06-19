@@ -276,6 +276,34 @@ impl YtDlp {
     }
 }
 
+impl YtDlp {
+    /// Экспортировать куки браузера в Netscape-файл через yt-dlp (нативные
+    /// reqwest-клиенты сами куки браузера читать не умеют). Best-effort:
+    /// `--playlist-items 0` не тянет видео, но куки уже загружаются и пишутся.
+    pub async fn export_cookies(
+        &self,
+        browser: &str,
+        out: &std::path::Path,
+        sample_url: &str,
+    ) -> Result<()> {
+        let out_s = out.to_string_lossy().into_owned();
+        let args = [
+            "--cookies-from-browser", browser,
+            "--cookies", &out_s,
+            "--skip-download", "--no-warnings", "--ignore-errors",
+            "--playlist-items", "0",
+            sample_url,
+        ];
+        let _ = self.run_inner(&args).await; // куки пишутся даже при ошибке экстракции
+        match tokio::fs::metadata(out).await {
+            Ok(m) if m.len() > 0 => Ok(()),
+            _ => Err(Error::Tool(
+                "yt-dlp не экспортировал куки (нет браузера/доступа к Keychain?)".into(),
+            )),
+        }
+    }
+}
+
 /// Доступен ли `ffmpeg` в PATH. yt-dlp дёргает его для оконного скачивания
 /// (`--download-sections`) и муксинга — без него media-стадия частично сломается,
 /// но метаданные/discovery работают. Бинарь можно переопределить env `FFMPEG_BIN`.

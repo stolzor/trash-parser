@@ -54,9 +54,11 @@ long = 500     # видео >90с
 
 [tiktok]
 # Cookie для нативного TikTok-discovery (msToken/ttwid повышают шанс обойти бот-стену).
-# Либо готовая строка заголовка, либо Netscape cookies.txt (как у yt-dlp).
-# cookie = "msToken=...; ttwid=...; sessionid=..."
-# cookie_file = "tiktok_cookies.txt"
+# Приоритет: cookie > cookie_file > cookies_from_browser.
+# cookie = "msToken=...; ttwid=...; sessionid=..."   # готовая строка заголовка
+# cookie_file = "tiktok_cookies.txt"                 # Netscape cookies.txt (как у yt-dlp)
+# cookies_from_browser = "chrome"   # авто-экспорт куки браузера через yt-dlp (покрывает
+                                     # и нативный SSR, и yt-dlp-fallback одной настройкой)
 
 [ytdlp]
 # YouTube бот-гейтит скачивание медиа ("confirm you're not a bot").

@@ -54,6 +54,9 @@ pub struct AppConfig {
 pub struct TiktokConfig {
     pub cookie: Option<String>,
     pub cookie_file: Option<String>,
+    /// Браузер для авто-экспорта куки (chrome/firefox/safari/…). Куки берём
+    /// через yt-dlp и подставляем в нативный клиент. Приоритет ниже cookie/file.
+    pub cookies_from_browser: Option<String>,
 }
 
 /// Пул прокси. `file` — список (по одному URL на строку); пусто = без прокси.
