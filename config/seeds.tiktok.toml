@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# TikTok-конфиг. Готов к запуску, как только появится residential/mobile IP.
+#
+#   detox-parser -c config/seeds.tiktok.toml run
+#
+# С datacenter-IP TikTok отдаёт капчу / "Your IP address is blocked" → 0 видео.
+# Нужны ДВЕ вещи (куки у тебя уже есть):
+#   1) [proxy] file с residential/mobile прокси  ← РАСКОММЕНТИРОВАТЬ
+#   2) валидные TikTok-куки (config/tiktok_cookies.txt или cookies_from_browser)
+# ─────────────────────────────────────────────────────────────────────────────
+
+out_root = "./data"                      # нейтральный локальный путь (staging)
+
+[manifest]
+url = "postgres://postgres:postgres@127.0.0.1:5433/detox"   # см. docker-compose.yml
+
+[storage]
+backend = "s3"                           # TikTok-данные лягут в S3 рядом с YouTube
+[storage.s3]
+bucket = "detox-bronze"
+region = "us-east-1"
+endpoint = "http://127.0.0.1:9000"       # MinIO; убрать для AWS. Креды — из env.
+prefix = "bronze"
+path_style = true
+staging_dir = "./.staging"
+
+# ─── ПРОКСИ: место под residential/mobile ────────────────────────────────────
+# Без этого TikTok с не-residential IP заблокирует. Создай файл (по одному URL
+# на строку: http://user:pass@host:port или socks5://…) и раскомментируй:
+[proxy]
+# file = "config/proxies.txt"            # ← РАСКОММЕНТИРОВАТЬ, когда будет прокси
+cooldown_base_secs = 60                  # сбойный прокси уходит в cooldown
+
+# ─── КУКИ TikTok ──────────────────────────────────────────────────────────────
+# Вариант А (файл): убери из config/tiktok_cookies.txt незаполненные REPLACE_-строки
+#   (или впиши sessionid/sid_guard, если есть логин) — msToken/ttwid обязательны.
+# Вариант Б (проще): закомментируй cookie_file и раскомментируй cookies_from_browser.
+[tiktok]
+cookie_file = "config/tiktok_cookies.txt"
+# cookies_from_browser = "chrome"        # авто-экспорт куки браузера (покрывает оба пути)
+
+[ytdlp]
+cookies_file = "config/tiktok_cookies.txt"   # те же куки для yt-dlp-fallback
+
+[media]
+download = true
+format = "worst[ext=mp4]/worst"
+max_filesize = "100M"
+long_windows = 4                         # длинные ролики (редкость у TikTok) — окнами
+
+[concurrency]
+meta_workers = 3
+media_workers = 2
+requests_per_sec = 2                     # бережно: TikTok чувствителен к частоте
+claim_batch = 20
+
+[discovery]
+gate_before_media = true
+min_duration_s = 3.0
+
+# ─── Источники сбора (хэштеги + аккаунты) ─────────────────────────────────────
+[[seeds]]
+platform = "tiktok"
+kind = "hashtag"
+value = "cooking"
+domain_hint = "short"
+target = 40
+
+[[seeds]]
+platform = "tiktok"
+kind = "hashtag"
+value = "satisfying"
+domain_hint = "short"
+target = 40
+
+# аккаунты — полные ленты (часто SSR-ят список видео надёжнее тегов)
+[[seeds]]
+platform = "tiktok"
+kind = "channel"
+value = "@gordonramsayofficial"
+target = 30

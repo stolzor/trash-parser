@@ -1,0 +1,14 @@
+# Пример списка прокси. Скопируй в config/proxies.txt и впиши РЕАЛЬНЫЕ
+# residential/mobile прокси (по одному URL на строку). Datacenter-прокси
+# TikTok тоже банит — нужны именно residential/mobile.
+#
+# Поддерживаются http(s) и socks5; с авторизацией или без:
+#   http://user:pass@resi-host:8080
+#   http://203.0.113.10:3128
+#   socks5://user:pass@mobile-gw:1080
+#
+# Ротация round-robin + cooldown на сбойных — настраивается в [proxy].
+# Пустые строки и строки с '#' игнорируются.
+
+# http://USER:PASS@your-residential-proxy:PORT
+# socks5://USER:PASS@your-mobile-gateway:PORT
