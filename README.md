@@ -137,27 +137,41 @@ normalized/<platform>/<id>.json  # кросс-платформенная common-
   cooldown на сбойных, общий для yt-dlp и нативных reqwest-клиентов. Нужен для
   стабильного TikTok (residential) и обхода IP-лимитов при масштабе.
 
-## Статус
+## Статус (финальный)
 
-Все запланированные возможности реализованы; где это возможно без внешних
+Все запланированные возможности реализованы; где возможно без внешних
 кредов/прокси — проверены вживую (Docker Postgres/MinIO + реальная сеть).
+**Замкнутый цикл подтверждён e2e:** 10 видео `parser → S3 → адаптер ml →
+EngagementLabeler → dopamine_label`.
 
 | Возможность | Статус |
 |---|---|
-| YouTube discovery — нативный InnerTube (`reqwest`) для query/channel + fallback на `yt-dlp` (hashtag/trending) | ✅ live |
+| YouTube discovery — нативный InnerTube (`reqwest`) query/channel + fallback `yt-dlp` (hashtag/trending) | ✅ live |
 | YouTube метаданные — контракт `ml` (9 полей) + полный raw `-J` + heatmap | ✅ live |
 | Скачивание медиа — capped low-res; для длинных видео оконно (`--download-sections`) | ✅ live |
-| TikTok discovery — SSR-парсинг (`__UNIVERSAL_DATA_FOR_REHYDRATION__`) + msToken/cookie + fallback | ⚙️ механизм готов, в тестах; live нужен residential-прокси + `msToken` |
+| TikTok discovery — SSR (`__UNIVERSAL_DATA_FOR_REHYDRATION__`) + msToken/cookie + fallback | ⚙️ механизм готов, в тестах; live нужен residential-прокси + `msToken` |
 | Многохоп против survivorship bias (`discovery.max_hops`) | ✅ unit + live |
 | Квоты по доменам short/long | ✅ unit |
 | Прокси-пул из файла (round-robin + cooldown) — для yt-dlp и reqwest | ✅ end-to-end |
 | Distributed claim (`FOR UPDATE SKIP LOCKED`, батчи) | ✅ live, на реальных данных |
 | PostgreSQL-манифест (async sqlx) | ✅ live |
-| S3/MinIO/R2 sink | ✅ live (MinIO) |
+| S3/MinIO/R2 sink + хранение отделено от `ml` | ✅ live (MinIO) |
 | Экспорт parquet, в т.ч. Hive-партиционированный | ✅ live (DuckDB) |
+| Docker Compose (PG + MinIO + бакет) на named volumes | ✅ live |
+| Адаптер чтения Bronze из S3 в `ml` (`dopamine/io/bronze.py`) | ✅ live (10 видео → labeler) |
+| Префлайт-проверка окружения (yt-dlp hard, ffmpeg soft-WARN) | ✅ |
 
-13 тестов: unit + gated интеграционные (Postgres/MinIO в Docker + реальная сеть),
-последние тихо пропускаются без `PG_TEST_URL`/`S3_TEST_BUCKET`.
+14 тестов: unit + gated интеграционные (Postgres/MinIO в Docker + реальная сеть);
+gated тихо пропускаются без `PG_TEST_URL`/`S3_TEST_BUCKET`. Сборка зелёная, clippy чист.
+
+### Замкнутый поток данных
+```
+parser (Rust, N воркеров)
+   discover → harvest → expand → media        статусы → PostgreSQL (манифест)
+        └──────────────┬───────────────┘       данные  → S3/MinIO (bronze/raw+normalized+видео)
+                       ▼
+        ml: dopamine.io.bronze (S3/ФС) → EngagementLabeler → dopamine_label
+```
 
 ### Единственное ограничение
 **Живой TikTok** требует residential-прокси + валидный `msToken`-cookie — без них
@@ -167,5 +181,6 @@ normalized/<platform>/<id>.json  # кросс-платформенная common-
 
 ### Опционально на будущее
 - Подписанный TikTok XHR для пагинации глубже первой страницы.
+- `media_path` в манифесте → S3-ключ вместо локального staging-пути (косметика).
 - Lakehouse (Apache Iceberg / Delta Lake) поверх S3 при росте и нескольких писателях.
 - Observability (Prometheus-метрики сбора).
