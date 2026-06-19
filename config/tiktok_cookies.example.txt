@@ -1,0 +1,19 @@
+# Netscape HTTP Cookie File
+# Пример для TikTok. Скопируй в config/tiktok_cookies.txt и подставь РЕАЛЬНЫЕ
+# значения из браузера (DevTools → Application → Cookies → tiktok.com), либо
+# экспортируй расширением «Get cookies.txt». Проще: [tiktok] cookies_from_browser="chrome".
+#
+# Формат (TAB-разделённый, 7 полей):
+#   domain   include_subdomains   path   secure   expiry   name   value
+# Строки с префиксом #HttpOnly_ — тоже реальные куки (не комментарий).
+# Парсер берёт куки домена *tiktok* (поля name/value), остальное игнорирует.
+#
+# Ключевые куки: ttwid (устройство), msToken (подпись API), tt_csrf_token,
+# tt_chain_token; sessionid/sid_guard — только если залогинен.
+
+.tiktok.com	TRUE	/	TRUE	2000000000	ttwid	REPLACE_WITH_REAL_TTWID
+.tiktok.com	TRUE	/	TRUE	2000000000	msToken	REPLACE_WITH_REAL_MSTOKEN
+.tiktok.com	TRUE	/	TRUE	2000000000	tt_csrf_token	REPLACE_WITH_REAL_CSRF
+.tiktok.com	TRUE	/	TRUE	2000000000	tt_chain_token	REPLACE_WITH_REAL_CHAIN
+#HttpOnly_.tiktok.com	TRUE	/	TRUE	2000000000	sessionid	REPLACE_IF_LOGGED_IN
+#HttpOnly_.tiktok.com	TRUE	/	TRUE	2000000000	sid_guard	REPLACE_IF_LOGGED_IN

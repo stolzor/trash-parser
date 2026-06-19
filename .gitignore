@@ -3,3 +3,6 @@
 .DS_Store
 /data
 /.staging
+# секреты: реальные куки/прокси не коммитим (пример — *.example.txt — можно)
+tiktok_cookies.txt
+proxies.txt
