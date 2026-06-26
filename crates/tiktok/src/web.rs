@@ -33,10 +33,19 @@ impl TikTokWeb {
         Self { http: ProxyHttp::new(proxy, UA), cookie }
     }
 
-    /// Скачать HTML страницы и вытащить из встроенного JSON список видео.
-    pub async fn discover_url(&self, url: &str, limit: usize) -> Result<Vec<TikTokItem>> {
+    /// Скачать HTML страницы и распарсить встроенное состояние TikTok в JSON.
+    ///
+    /// Общий нижний слой для discovery (страница тега/профиля) и экстракции
+    /// (страница `/video/<id>`). Классифицирует отказы так, чтобы пул прокси и
+    /// ретраи действовали осмысленно: region-block помечает узел плохим и
+    /// уходит на прокси другого региона, бот-стена отдаёт `Parse` (выше по
+    /// стеку — fallback на yt-dlp).
+    pub async fn fetch_page(&self, url: &str) -> Result<Value> {
         let (client, proxy) = self.http.pick();
-        let mut req = client.get(url).header("Accept-Language", "en-US,en;q=0.9");
+        let mut req = client
+            .get(url)
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Referer", "https://www.tiktok.com/");
         if let Some(c) = &self.cookie {
             req = req.header("Cookie", c);
         }
@@ -57,17 +66,36 @@ impl TikTokWeb {
             self.http.report(&proxy, false);
             return Err(Error::Transient(format!("tiktok {url} HTTP {status}")));
         }
-        self.http.report(&proxy, true);
         let html = resp
             .text()
             .await
             .map_err(|e| Error::Transient(format!("tiktok body {url}: {e}")))?;
 
-        let json = extract_embedded_json(&html)
-            .ok_or_else(|| Error::Parse("в HTML нет встроенного JSON (бот-стена?)".into()))?;
+        // Регион прокси выпилен из TikTok — на этом узле бесполезно ретраить.
+        if is_region_block(&html) {
+            self.http.report(&proxy, false);
+            return Err(Error::RegionBlocked(format!(
+                "tiktok {url}: регион прокси заблокирован (смени узел на другой регион)"
+            )));
+        }
+
+        let Some(json) = extract_embedded_json(&html) else {
+            // Нет встроенного состояния — обычно бот-стена. Узел не виноват
+            // (лечится куками/msToken), поэтому прокси не штрафуем.
+            self.http.report(&proxy, true);
+            return Err(Error::Parse(
+                "в HTML нет встроенного JSON (бот-стена?)".into(),
+            ));
+        };
         let v: Value = serde_json::from_str(json)
             .map_err(|e| Error::Parse(format!("tiktok embedded JSON: {e}")))?;
+        self.http.report(&proxy, true);
+        Ok(v)
+    }
 
+    /// Скачать страницу тега/профиля и вытащить из встроенного JSON список видео.
+    pub async fn discover_url(&self, url: &str, limit: usize) -> Result<Vec<TikTokItem>> {
+        let v = self.fetch_page(url).await?;
         let mut items = Vec::new();
         let mut seen = HashSet::new();
         collect_items(&v, &mut items, &mut seen);
@@ -94,6 +122,12 @@ fn extract_embedded_json(html: &str) -> Option<&str> {
         }
     }
     None
+}
+
+/// Признак того, что TikTok отдал страницу-заглушку «ушли из региона» —
+/// это привязано к региону прокси, а не к нашему запросу.
+fn is_region_block(html: &str) -> bool {
+    html.contains("We regret to inform you that we have discontinued operating TikTok")
 }
 
 /// Числовой ли id (TikTok video id — длинная строка цифр).
@@ -169,5 +203,13 @@ mod tests {
     #[test]
     fn no_embedded_json_returns_none() {
         assert!(extract_embedded_json("<html>bot wall</html>").is_none());
+    }
+
+    #[test]
+    fn detects_region_block_page() {
+        let blocked = "<html><body><p>\n  We regret to inform you that we have \
+                       discontinued operating TikTok in your region.\n</p></body></html>";
+        assert!(is_region_block(blocked));
+        assert!(!is_region_block("<html>normal page</html>"));
     }
 }

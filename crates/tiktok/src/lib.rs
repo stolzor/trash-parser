@@ -5,7 +5,7 @@
 //! (бот-стена / items грузятся подписанным XHR), откатываемся на yt-dlp —
 //! как и для YouTube, поэтому нативный путь безопасно держать дефолтным.
 
-mod web;
+pub mod web;
 
 use detox_parser_core::error::Result;
 use detox_parser_core::traits::Discoverer;
@@ -14,7 +14,7 @@ use detox_parser_core::ProxyPool;
 use detox_parser_ytdlp::{now_unix, YtDlp};
 use std::sync::Arc;
 use tracing::warn;
-use web::{TikTokItem, TikTokWeb};
+pub use web::{TikTokItem, TikTokWeb};
 
 const DEFAULT_TARGET: usize = 40;
 

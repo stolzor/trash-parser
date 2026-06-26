@@ -18,6 +18,11 @@ pub enum Error {
     #[error("rate limited: {0}")]
     RateLimited(String),
 
+    /// Регион прокси заблокирован платформой (TikTok ушёл из региона) —
+    /// ретрай на том же узле бесполезен, нужен прокси другого региона.
+    #[error("region blocked: {0}")]
+    RegionBlocked(String),
+
     /// Ответ есть, но распарсить не удалось (изменилась схема платформы).
     #[error("parse error: {0}")]
     Parse(String),
@@ -42,8 +47,12 @@ pub enum Error {
 }
 
 impl Error {
-    /// Стоит ли ретраить ошибку.
+    /// Стоит ли ретраить ошибку. Регион-блок ретраим, потому что ретрай
+    /// заново выбирает прокси из пула (узел-нарушитель уже помечен плохим).
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Error::Transient(_) | Error::RateLimited(_))
+        matches!(
+            self,
+            Error::Transient(_) | Error::RateLimited(_) | Error::RegionBlocked(_)
+        )
     }
 }

@@ -18,6 +18,7 @@ detox-parser-store-s3 = { path = "crates/store-s3" }
 detox-parser-ytdlp = { path = "crates/ytdlp" }
 detox-parser-youtube = { path = "crates/youtube" }
 detox-parser-tiktok = { path = "crates/tiktok" }
+detox-parser-session = { path = "crates/session" }
 detox-parser-pipeline = { path = "crates/pipeline" }
 detox-parser-export = { path = "crates/export" }
 
