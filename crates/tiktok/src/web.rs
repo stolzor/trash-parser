@@ -9,7 +9,7 @@ use detox_parser_core::error::{Error, Result};
 use detox_parser_core::ProxyPool;
 use detox_parser_http::ProxyHttp;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
@@ -102,6 +102,64 @@ impl TikTokWeb {
         items.truncate(limit);
         Ok(items)
     }
+
+    /// Тир A автосбора кук (ADR-0003): GET tiktok.com и собрать анонимные куки
+    /// доверия из `Set-Cookie` (`ttwid`, `tt_csrf_token`, `tt_chain_token`).
+    /// БЕЗ браузера и без логина → без `msToken` (он JS-генерируемый — это Тир B).
+    /// `None`, если сервер не отдал кук. Применяется, когда cookie не настроена.
+    pub async fn bootstrap_cookies(&self) -> Result<Option<String>> {
+        let (client, proxy) = self.http.pick();
+        let resp = match client
+            .get("https://www.tiktok.com/")
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Referer", "https://www.tiktok.com/")
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                self.http.report(&proxy, false);
+                return Err(Error::Transient(format!("tiktok bootstrap GET: {e}")));
+            }
+        };
+        let status = resp.status();
+        if !status.is_success() {
+            self.http.report(&proxy, false);
+            return Err(Error::Transient(format!("tiktok bootstrap HTTP {status}")));
+        }
+        self.http.report(&proxy, true);
+
+        let raw = resp
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|hv| hv.to_str().ok());
+        let jar = cookies_from_set_cookie(raw);
+        Ok(jar_to_header(&jar))
+    }
+}
+
+/// Собрать `name=value` из заголовков Set-Cookie (берём первый сегмент каждого,
+/// до `;` — остальное это атрибуты Path/Domain/HttpOnly).
+fn cookies_from_set_cookie<'a>(values: impl Iterator<Item = &'a str>) -> BTreeMap<String, String> {
+    let mut jar = BTreeMap::new();
+    for s in values {
+        if let Some((k, v)) = s.split(';').next().and_then(|p| p.split_once('=')) {
+            let (k, v) = (k.trim(), v.trim());
+            if !k.is_empty() && !v.is_empty() {
+                jar.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+    jar
+}
+
+/// Склеить jar в строку заголовка `Cookie`. `None`, если пусто.
+fn jar_to_header(jar: &BTreeMap<String, String>) -> Option<String> {
+    if jar.is_empty() {
+        return None;
+    }
+    Some(jar.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; "))
 }
 
 /// Достать содержимое `<script id="...">…</script>` для известных маркеров.
@@ -203,6 +261,28 @@ mod tests {
     #[test]
     fn no_embedded_json_returns_none() {
         assert!(extract_embedded_json("<html>bot wall</html>").is_none());
+    }
+
+    #[test]
+    fn parses_anonymous_cookies_from_set_cookie() {
+        let vals = [
+            "ttwid=abc123; Path=/; Domain=.tiktok.com; HttpOnly; Secure",
+            "tt_csrf_token=XYZ789; Path=/; Secure",
+            "tt_chain_token=QQ; Path=/",
+            "  ; junk-without-eq",
+            "empty=; Path=/",
+        ];
+        let jar = cookies_from_set_cookie(vals.iter().copied());
+        assert_eq!(jar.get("ttwid").map(String::as_str), Some("abc123"));
+        assert_eq!(jar.get("tt_csrf_token").map(String::as_str), Some("XYZ789"));
+        assert_eq!(jar.get("tt_chain_token").map(String::as_str), Some("QQ"));
+        assert!(!jar.contains_key("empty"), "пустое значение отброшено");
+        assert_eq!(jar.len(), 3);
+
+        let header = jar_to_header(&jar).unwrap();
+        // BTreeMap → детерминированный порядок по имени
+        assert_eq!(header, "tt_chain_token=QQ; tt_csrf_token=XYZ789; ttwid=abc123");
+        assert!(jar_to_header(&BTreeMap::new()).is_none());
     }
 
     #[test]

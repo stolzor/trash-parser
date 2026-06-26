@@ -126,6 +126,19 @@ impl Pipeline {
                 }
             }
         }
+        // Тир A (последний дешёвый фоллбэк): анонимные куки доверия без браузера
+        // и без логина (ttwid/tt_chain_token) — снижают долю бот-стен нативного пути.
+        if tt_cookie.is_none() {
+            let web = detox_parser_tiktok::TikTokWeb::new(proxy.clone(), None);
+            match web.bootstrap_cookies().await {
+                Ok(Some(c)) => {
+                    info!("tiktok: анонимные куки получены (bootstrap без браузера)");
+                    tt_cookie = Some(c);
+                }
+                Ok(None) => warn!("tiktok: bootstrap не вернул кук"),
+                Err(e) => warn!(error = %e, "tiktok: bootstrap кук не удался"),
+            }
+        }
 
         // Какие платформы поднимать — по присутствию в seeds (плюс всегда обе для on-demand).
         let mut backends = Vec::new();

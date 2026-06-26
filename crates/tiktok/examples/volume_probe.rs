@@ -110,19 +110,32 @@ async fn main() {
 
     // --- куки: нативный путь хочет строку-заголовок, yt-dlp — файл ---
     let cookie_file = std::env::var("TIKTOK_COOKIE_FILE").ok();
-    let native_cookie = std::env::var("TIKTOK_COOKIE")
+    let mut native_cookie = std::env::var("TIKTOK_COOKIE")
         .ok()
         .or_else(|| cookie_file.as_deref().and_then(cookie_header_from_file));
+
+    let cookies = CookieOpts { from_browser: None, file: cookie_file.clone() };
+    let media_dir = std::env::temp_dir().join("tiktok_probe_media");
+    let mut web = TikTokWeb::new(proxy.clone(), native_cookie.clone());
+    let yt = YtDlp::build(Platform::Tiktok, media_dir.clone(), &cookies, proxy.clone());
+
+    // Тир A: если cookie не задана — добыть анонимные куки доверия без браузера.
+    if native_cookie.is_none() {
+        match web.bootstrap_cookies().await {
+            Ok(Some(c)) => {
+                eprintln!("cookie: bootstrap анонимных кук ок ({} симв.)", c.len());
+                web = TikTokWeb::new(proxy.clone(), Some(c.clone()));
+                native_cookie = Some(c);
+            }
+            Ok(None) => eprintln!("cookie: bootstrap не вернул кук"),
+            Err(e) => eprintln!("cookie: bootstrap не удался ({e})"),
+        }
+    }
     eprintln!(
         "cookie: native={}, ytdlp_file={}",
         if native_cookie.is_some() { "есть" } else { "нет" },
         cookie_file.as_deref().unwrap_or("нет")
     );
-
-    let cookies = CookieOpts { from_browser: None, file: cookie_file.clone() };
-    let media_dir = std::env::temp_dir().join("tiktok_probe_media");
-    let web = TikTokWeb::new(proxy.clone(), native_cookie.clone());
-    let yt = YtDlp::build(Platform::Tiktok, media_dir.clone(), &cookies, proxy.clone());
 
     let (page_url, spec) = if seed.starts_with('@') {
         let u = format!("https://www.tiktok.com/{seed}");
