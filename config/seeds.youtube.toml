@@ -49,8 +49,15 @@ long = 500     # видео >90с
 # Файл со списком прокси (один URL на строку: http://[user:pass@]host:port, socks5://…).
 # Ротация round-robin + экспоненциальный cooldown на сбойных. Применяется и к
 # yt-dlp, и к нативным reqwest-клиентам (InnerTube/TikTok-web).
+# Для YouTube сюда ставят rotating residential: метаданные (`-J`) — килобайты,
+# по трафику копейки, а чистые IP снимают бот-гейт (см. ADR-0005).
 # file = "./config/proxies.txt"
 # cooldown_base_secs = 30
+# Раздельный маршрут под скачивание медиа (гигабайты) — чтобы НЕ гнать видео
+# через дорогой residential. Без секции медиа идёт через [proxy].
+# [proxy.media]
+# direct = true                     # качать напрямую, мимо пула (рекомендуется для YouTube)
+# file = "config/datacenter.txt"    # ИЛИ свой дешёвый датацентр-пул под гигабайты
 
 [tiktok]
 # Cookie для нативного TikTok-discovery (msToken/ttwid повышают шанс обойти бот-стену).

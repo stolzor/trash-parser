@@ -35,3 +35,4 @@
 | [0002](0002-session-warming-subsystem.md) | Подсистема прогретых сессий (`crates/session`)         | Proposed |
 | [0003](0003-device-fingerprint-and-signatures.md) | Слой JS-фингерпринта устройства и подписи запросов | Proposed |
 | [0004](0004-area-check-ytdlp-covers-vod.md) | Проверка области: yt-dlp покрывает VOD → сессии отложить | Accepted |
+| [0005](0005-per-stage-proxy-routing-and-gate-retry.md) | Раздельная маршрутизация прокси по стадиям + ретрай бот-гейта ротацией IP | Accepted |

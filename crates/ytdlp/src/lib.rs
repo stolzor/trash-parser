@@ -32,13 +32,17 @@ pub struct YtDlp {
     media_dir: PathBuf,
     /// Префикс-аргументы с куками (пусто, если не заданы).
     cookie_args: Vec<String>,
-    /// Пул прокси (ротация на каждый вызов yt-dlp).
-    proxy: Option<Arc<ProxyPool>>,
+    /// Пул прокси для discovery/метаданных (лёгкие запросы — сюда ставят чистый
+    /// residential). Ротация на каждый вызов yt-dlp.
+    meta_proxy: Option<Arc<ProxyPool>>,
+    /// Пул прокси для скачивания медиа (гигабайты). Может быть другим пулом или
+    /// `None` (скачивание напрямую, мимо дорогого пула).
+    media_proxy: Option<Arc<ProxyPool>>,
 }
 
 impl YtDlp {
     pub fn new(platform: Platform, media_dir: impl Into<PathBuf>) -> Self {
-        Self::build(platform, media_dir, &CookieOpts::default(), None)
+        Self::build(platform, media_dir, &CookieOpts::default(), None, None)
     }
 
     pub fn with_cookies(
@@ -46,15 +50,18 @@ impl YtDlp {
         media_dir: impl Into<PathBuf>,
         cookies: &CookieOpts,
     ) -> Self {
-        Self::build(platform, media_dir, cookies, None)
+        Self::build(platform, media_dir, cookies, None, None)
     }
 
-    /// Полный конструктор: куки + опциональный пул прокси.
+    /// Полный конструктор: куки + раздельные пулы прокси под метаданные и медиа.
+    /// `meta_proxy` обслуживает `-J`/`--flat-playlist` (discovery+метаданные),
+    /// `media_proxy` — скачивание (может быть тем же пулом, другим или `None`).
     pub fn build(
         platform: Platform,
         media_dir: impl Into<PathBuf>,
         cookies: &CookieOpts,
-        proxy: Option<Arc<ProxyPool>>,
+        meta_proxy: Option<Arc<ProxyPool>>,
+        media_proxy: Option<Arc<ProxyPool>>,
     ) -> Self {
         let mut cookie_args = Vec::new();
         if let Some(browser) = &cookies.from_browser {
@@ -70,21 +77,30 @@ impl YtDlp {
             platform,
             media_dir: media_dir.into(),
             cookie_args,
-            proxy,
+            meta_proxy,
+            media_proxy,
         }
     }
 
     /// Классификация stderr yt-dlp в наш тип ошибок (ретраить или нет).
-    fn classify(stderr: &str) -> Error {
+    fn classify(&self, stderr: &str) -> Error {
         let s = stderr.to_lowercase();
         if s.contains("http error 429") || s.contains("too many requests") {
             Error::RateLimited(stderr.trim().to_owned())
         } else if s.contains("confirm you") || s.contains("sign in") {
-            // бот-гейтинг — лечится только куками, ретрай без них бесполезен
-            Error::Tool(format!(
-                "{} [подсказка: задай [ytdlp] cookies_from_browser или cookies_file]",
-                stderr.trim()
-            ))
+            // Бот-гейтинг завязан на репутацию IP. Если есть пул прокси — ретрай
+            // попадёт на другой узел, поэтому это временная ошибка: помечаем
+            // текущий IP плохим (Transient → cooldown+ротация в пуле) и пробуем
+            // заново. Без пула лечится только куками → терминальная Tool с
+            // подсказкой (ретрай с того же IP бесполезен).
+            if self.has_proxy() {
+                Error::Transient(format!("бот-гейт, ротирую IP: {}", stderr.trim()))
+            } else {
+                Error::Tool(format!(
+                    "{} [подсказка: задай residential [proxy] или [ytdlp] cookies_file]",
+                    stderr.trim()
+                ))
+            }
         } else if s.contains("http error 403") || s.contains("forbidden") {
             // часто троттлинг/протухший URL — ретрай с backoff может помочь
             Error::Transient(stderr.trim().to_owned())
@@ -102,9 +118,19 @@ impl YtDlp {
         }
     }
 
-    async fn run(&self, args: &[&str]) -> Result<std::process::Output> {
+    /// Есть ли хоть какой-то пул прокси (для решения о ретраибельности бот-гейта).
+    fn has_proxy(&self) -> bool {
+        self.meta_proxy.is_some() || self.media_proxy.is_some()
+    }
+
+    /// Запустить yt-dlp через заданный пул прокси (`pool` — метаданные или медиа).
+    async fn run(
+        &self,
+        args: &[&str],
+        pool: Option<&Arc<ProxyPool>>,
+    ) -> Result<std::process::Output> {
         let now = now_unix();
-        let proxy = self.proxy.as_ref().and_then(|p| p.acquire(now));
+        let proxy = pool.and_then(|p| p.acquire(now));
 
         let mut full: Vec<&str> = self.cookie_args.iter().map(String::as_str).collect();
         if let Some(px) = &proxy {
@@ -116,8 +142,9 @@ impl YtDlp {
 
         let result = self.run_inner(&full).await;
 
-        // отчёт прокси: сбой засчитываем только для сетевых причин (429/transient)
-        if let (Some(pool), Some(px)) = (&self.proxy, &proxy) {
+        // отчёт прокси: сбой засчитываем только для сетевых причин (429/transient,
+        // включая бот-гейт — он теперь Transient при наличии пула → узел в cooldown)
+        if let (Some(pool), Some(px)) = (pool, &proxy) {
             let ok = !matches!(&result, Err(Error::RateLimited(_)) | Err(Error::Transient(_)));
             pool.report(px, ok, now);
         }
@@ -135,7 +162,7 @@ impl YtDlp {
                 Error::Tool(format!("не удалось запустить '{}': {e} (установлен ли yt-dlp?)", self.bin))
             })?;
         if !out.status.success() {
-            return Err(Self::classify(&String::from_utf8_lossy(&out.stderr)));
+            return Err(self.classify(&String::from_utf8_lossy(&out.stderr)));
         }
         Ok(out)
     }
@@ -149,7 +176,7 @@ impl Extractor for YtDlp {
 
     async fn metadata(&self, video: &VideoId, url: &str) -> Result<RawExtract> {
         let out = self
-            .run(&["-J", "--no-warnings", "--no-playlist", url])
+            .run(&["-J", "--no-warnings", "--no-playlist", url], self.meta_proxy.as_ref())
             .await?;
         let raw: serde_json::Value = serde_json::from_slice(&out.stdout)
             .map_err(|e| Error::Parse(format!("yt-dlp -J не распарсился: {e}")))?;
@@ -207,7 +234,7 @@ impl MediaFetcher for YtDlp {
         args.push(url.to_string());
 
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = self.run(&arg_refs).await?;
+        let out = self.run(&arg_refs, self.media_proxy.as_ref()).await?;
 
         // при окнах yt-dlp печатает по строке на файл
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -240,14 +267,10 @@ impl YtDlp {
     pub async fn flat_playlist(&self, target: &str, limit: usize) -> Result<Vec<FlatEntry>> {
         let lim = limit.to_string();
         let out = self
-            .run(&[
-                "--flat-playlist",
-                "--no-warnings",
-                "-J",
-                "--playlist-end",
-                &lim,
-                target,
-            ])
+            .run(
+                &["--flat-playlist", "--no-warnings", "-J", "--playlist-end", &lim, target],
+                self.meta_proxy.as_ref(),
+            )
             .await?;
         let root: serde_json::Value = serde_json::from_slice(&out.stdout)
             .map_err(|e| Error::Parse(format!("flat-playlist JSON: {e}")))?;
@@ -324,4 +347,39 @@ pub fn now_unix() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use detox_parser_core::error::Error;
+
+    fn ytdlp_with_pool(with_pool: bool) -> YtDlp {
+        let pool = with_pool
+            .then(|| Arc::new(ProxyPool::from_list(vec!["http://p1".into()], 30)));
+        YtDlp::build(Platform::Youtube, "/tmp", &CookieOpts::default(), pool, None)
+    }
+
+    #[test]
+    fn bot_gate_is_terminal_without_proxy() {
+        let yt = ytdlp_with_pool(false);
+        let e = yt.classify("ERROR: Sign in to confirm you're not a bot");
+        assert!(matches!(e, Error::Tool(_)), "без пула гейт терминальный (нужны куки)");
+        assert!(!e.is_retryable());
+    }
+
+    #[test]
+    fn bot_gate_is_retryable_with_proxy() {
+        let yt = ytdlp_with_pool(true);
+        let e = yt.classify("ERROR: Sign in to confirm you're not a bot");
+        assert!(matches!(e, Error::Transient(_)), "с пулом гейт → ротация IP");
+        assert!(e.is_retryable(), "ретрай попадёт на другой прокси");
+    }
+
+    #[test]
+    fn rate_limit_and_unavailable_classified_regardless_of_proxy() {
+        let yt = ytdlp_with_pool(true);
+        assert!(matches!(yt.classify("HTTP Error 429: Too Many Requests"), Error::RateLimited(_)));
+        assert!(matches!(yt.classify("Video unavailable"), Error::Unavailable(_)));
+    }
 }

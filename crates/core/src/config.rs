@@ -60,18 +60,39 @@ pub struct TiktokConfig {
 }
 
 /// Пул прокси. `file` — список (по одному URL на строку); пусто = без прокси.
+/// Основной пул обслуживает discovery + метаданные (лёгкие запросы, килобайты)
+/// — сюда и ставят чистый residential. Скачивание медиа (гигабайты) можно увести
+/// в отдельный маршрут через `[proxy.media]`, чтобы не жечь дорогой трафик.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProxyConfig {
     pub file: Option<String>,
     /// Базовый cooldown (с) для прокси при сбое (растёт экспоненциально).
     pub cooldown_base_secs: u64,
+    /// Отдельный маршрут прокси для стадии media (скачивание). Не задан → медиа
+    /// идёт через основной пул (обратная совместимость).
+    pub media: Option<MediaProxyConfig>,
 }
 
 impl Default for ProxyConfig {
     fn default() -> Self {
-        Self { file: None, cooldown_base_secs: 30 }
+        Self { file: None, cooldown_base_secs: 30, media: None }
     }
+}
+
+/// Маршрутизация прокси для стадии media отдельно от discovery/метаданных.
+/// `direct = true` → медиа скачивается напрямую, мимо (дорогого) пула. Иначе
+/// `file` задаёт свой (дешёвый датацентр) пул под гигабайты; без `file` и без
+/// `direct` — как основной пул.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MediaProxyConfig {
+    /// Качать медиа напрямую, без прокси (перекрывает `file`).
+    pub direct: bool,
+    /// Отдельный список прокси под медиа (если не `direct`).
+    pub file: Option<String>,
+    /// Cooldown для этого пула (по умолчанию — как у основного).
+    pub cooldown_base_secs: Option<u64>,
 }
 
 /// Манифест состояния (PostgreSQL). DSN из конфига или env DATABASE_URL.
@@ -246,5 +267,41 @@ impl Default for DiscoveryConfig {
             gate_before_media: true,
             min_duration_s: 3.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_media_defaults_to_none_backward_compat() {
+        // старый конфиг без [proxy.media] → media наследует основной пул (None здесь)
+        let cfg: ProxyConfig = serde_json::from_str(r#"{"file":"p.txt"}"#).unwrap();
+        assert_eq!(cfg.file.as_deref(), Some("p.txt"));
+        assert!(cfg.media.is_none(), "нет media-секции → обратная совместимость");
+    }
+
+    #[test]
+    fn proxy_media_direct_parsed() {
+        // [proxy.media] direct = true → медиа мимо пула
+        let cfg: ProxyConfig =
+            serde_json::from_str(r#"{"file":"res.txt","media":{"direct":true}}"#).unwrap();
+        let m = cfg.media.expect("media секция");
+        assert!(m.direct);
+        assert!(m.file.is_none());
+    }
+
+    #[test]
+    fn proxy_media_separate_pool_parsed() {
+        // [proxy.media] file = "dc.txt" → свой дешёвый пул под гигабайты
+        let cfg: ProxyConfig = serde_json::from_str(
+            r#"{"file":"res.txt","cooldown_base_secs":30,"media":{"file":"dc.txt","cooldown_base_secs":10}}"#,
+        )
+        .unwrap();
+        let m = cfg.media.expect("media секция");
+        assert!(!m.direct);
+        assert_eq!(m.file.as_deref(), Some("dc.txt"));
+        assert_eq!(m.cooldown_base_secs, Some(10));
     }
 }

@@ -117,7 +117,14 @@ async fn main() {
     let cookies = CookieOpts { from_browser: None, file: cookie_file.clone() };
     let media_dir = std::env::temp_dir().join("tiktok_probe_media");
     let mut web = TikTokWeb::new(proxy.clone(), native_cookie.clone());
-    let yt = YtDlp::build(Platform::Tiktok, media_dir.clone(), &cookies, proxy.clone());
+    // проба меряет только метаданные — оба пула = основной прокси
+    let yt = YtDlp::build(
+        Platform::Tiktok,
+        media_dir.clone(),
+        &cookies,
+        proxy.clone(),
+        proxy.clone(),
+    );
 
     // Тир A: если cookie не задана — добыть анонимные куки доверия без браузера.
     if native_cookie.is_none() {

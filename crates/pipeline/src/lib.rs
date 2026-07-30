@@ -87,14 +87,33 @@ impl Pipeline {
             file: cfg.ytdlp.cookies_file.clone(),
         };
 
-        // Пул прокси (опц.) — общий для yt-dlp и нативных reqwest-клиентов.
-        let proxy: Option<Arc<ProxyPool>> = match &cfg.proxy.file {
-            Some(f) => {
-                let pool = ProxyPool::from_file(f, cfg.proxy.cooldown_base_secs)?;
-                info!(proxies = pool.len(), "proxy pool loaded");
-                Some(Arc::new(pool))
+        // Основной пул прокси (опц.) — discovery + метаданные (+ нативный TikTok).
+        // Сюда ставят чистый residential: запросы лёгкие (килобайты JSON).
+        let proxy: Option<Arc<ProxyPool>> = load_proxy_pool(
+            cfg.proxy.file.as_deref(),
+            cfg.proxy.cooldown_base_secs,
+            "meta",
+        )?;
+
+        // Пул под стадию media (скачивание, гигабайты). Разводим маршруты, чтобы
+        // не жечь дорогой residential-трафик на видео:
+        //   нет [proxy.media]      → как основной пул (обратная совместимость);
+        //   [proxy.media] direct   → скачивание напрямую, мимо пула (None);
+        //   [proxy.media] file=…    → свой (дешёвый датацентр) пул под гигабайты.
+        let media_proxy: Option<Arc<ProxyPool>> = match &cfg.proxy.media {
+            None => proxy.clone(),
+            Some(m) if m.direct => {
+                info!("media: скачивание напрямую, без прокси (экономия трафика пула)");
+                None
             }
-            None => None,
+            Some(m) => match m.file.as_deref() {
+                Some(f) => load_proxy_pool(
+                    Some(f),
+                    m.cooldown_base_secs.unwrap_or(cfg.proxy.cooldown_base_secs),
+                    "media",
+                )?,
+                None => proxy.clone(),
+            },
         };
 
         // Cookie для нативного TikTok: готовая строка > Netscape-файл > авто-экспорт
@@ -143,7 +162,13 @@ impl Pipeline {
         // Какие платформы поднимать — по присутствию в seeds (плюс всегда обе для on-demand).
         let mut backends = Vec::new();
         for platform in [Platform::Youtube, Platform::Tiktok] {
-            let yt = YtDlp::build(platform, media_dir.clone(), &cookies, proxy.clone());
+            let yt = YtDlp::build(
+                platform,
+                media_dir.clone(),
+                &cookies,
+                proxy.clone(),
+                media_proxy.clone(),
+            );
             let discoverer: Arc<dyn Discoverer> = match platform {
                 Platform::Youtube => Arc::new(detox_parser_youtube::YoutubeDiscoverer::new(
                     yt.clone(),
@@ -522,7 +547,38 @@ async fn cleanup_partial(media_dir: &std::path::Path, id: &str) {
     }
 }
 
-/// Ретрай с экспоненциальной задержкой только для временных ошибок.
+/// Загрузить пул прокси из файла (или `None`, если путь не задан). `role` —
+/// метка для лога (`meta`/`media`), чтобы было видно, какой маршрут поднялся.
+fn load_proxy_pool(
+    file: Option<&str>,
+    cooldown_base_secs: u64,
+    role: &str,
+) -> Result<Option<Arc<ProxyPool>>> {
+    match file {
+        Some(f) => {
+            let pool = ProxyPool::from_file(f, cooldown_base_secs)?;
+            info!(proxies = pool.len(), role, "proxy pool loaded");
+            Ok(Some(Arc::new(pool)))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Джиттер для ретраев (anti-thundering-herd): рассинхронизирует воркеры без
+/// часов и без rand — xorshift по атомарному счётчику. Возвращает 0..cap мс.
+fn retry_jitter_millis(cap: u64) -> u64 {
+    use std::sync::atomic::AtomicU64;
+    static SEED: AtomicU64 = AtomicU64::new(0x9E3779B97F4A7C15);
+    let mut x = SEED.fetch_add(0x2545F4914F6CDD1D, Ordering::Relaxed);
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    x.wrapping_mul(0x2545F4914F6CDD1D) % cap.max(1)
+}
+
+/// Ретрай только для временных ошибок: экспоненциальная задержка (1,2,4,…,30 c)
+/// + джиттер до +25%. Бот-гейт с пулом прокси попадает сюда (Transient) → каждая
+/// попытка уходит на свежий IP из пула.
 async fn retry<T, Fut, F>(max: u32, mut f: F) -> Result<T>
 where
     F: FnMut() -> Fut,
@@ -533,8 +589,9 @@ where
         match f().await {
             Ok(v) => return Ok(v),
             Err(e) if e.is_retryable() && attempt < max => {
-                let secs = (1u64 << attempt).min(30);
-                tokio::time::sleep(Duration::from_secs(secs)).await;
+                let base_secs = (1u64 << attempt).min(30);
+                let delay = base_secs * 1000 + retry_jitter_millis(base_secs * 250);
+                tokio::time::sleep(Duration::from_millis(delay)).await;
                 attempt += 1;
             }
             Err(e) => return Err(e),

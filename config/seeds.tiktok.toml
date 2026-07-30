@@ -51,6 +51,11 @@ long = 500     # видео >90с
 # yt-dlp, и к нативным reqwest-клиентам (InnerTube/TikTok-web).
 file = "./config/proxies.txt"
 cooldown_base_secs = 30
+# Раздельный маршрут под скачивание медиа (гигабайты), чтобы не жечь дорогой
+# residential-трафик на видео. Без секции медиа идёт через [proxy] (как раньше).
+# [proxy.media]
+# direct = true                     # качать напрямую, мимо пула (экономия трафика)
+# file = "config/datacenter.txt"    # ИЛИ свой дешёвый датацентр-пул под гигабайты
 
 [tiktok]
 # Cookie для нативного TikTok-discovery (msToken/ttwid повышают шанс обойти бот-стену).
