@@ -20,13 +20,20 @@ staging_dir = "./.staging"            # локальный временный б
 # Креды — только из env: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
 
 [concurrency]
-meta_workers = 4        # параллельных задач метаданных на платформу (внутри процесса)
-media_workers = 2       # параллельных скачиваний
-requests_per_sec = 2    # rate-limit на платформу
+# Пока нет чистых IP (residential в [proxy]) — держим темп низким: с одного
+# серверного IP пачка параллельных запросов триггерит бот-гейт (см. ADR-0005).
+# Появится residential → можно вернуть meta_workers=4, requests_per_sec=2.
+meta_workers = 1        # параллельных задач метаданных на платформу (внутри процесса)
+media_workers = 1       # параллельных скачиваний
+requests_per_sec = 1    # rate-limit на платформу (бережно, против гейта по объёму)
 claim_batch = 50        # размер батча захвата из очереди (меньше → лучше делёж между воркерами)
 
 [media]
-download = true
+# Метаданные-first: все 9 ML-полей приходят из `-J`, медиа для датасета не нужно
+# (ADR-0004). Скачивание — гигабайты и лишний повод для гейта → выключено.
+# Включи (download = true), когда будет отдельный маршрут (residential для меты
+# + [proxy.media] direct для видео).
+download = false
 format = "worst[ext=mp4]/worst"   # capped low-res (хватает для фич ml)
 max_filesize = "100M"
 long_windows = 4                  # длинные видео качаем N окнами, а не целиком (0 = целиком)
