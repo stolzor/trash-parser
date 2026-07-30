@@ -6,3 +6,10 @@
 # секреты: реальные куки/прокси не коммитим (пример — *.example.txt — можно)
 tiktok_cookies.txt
 proxies.txt
+
+# артефакты harness (volume_probe) и локальный state
+tiktok_probe*.csv
+*.sqlite
+*.sqlite-journal
+*.db
+*.bundle
