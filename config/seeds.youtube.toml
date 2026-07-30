@@ -49,8 +49,8 @@ long = 500     # видео >90с
 # Файл со списком прокси (один URL на строку: http://[user:pass@]host:port, socks5://…).
 # Ротация round-robin + экспоненциальный cooldown на сбойных. Применяется и к
 # yt-dlp, и к нативным reqwest-клиентам (InnerTube/TikTok-web).
-file = "./config/proxies.txt"
-cooldown_base_secs = 30
+# file = "./config/proxies.txt"
+# cooldown_base_secs = 30
 
 [tiktok]
 # Cookie для нативного TikTok-discovery (msToken/ttwid повышают шанс обойти бот-стену).
