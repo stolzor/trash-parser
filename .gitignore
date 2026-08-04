@@ -6,6 +6,8 @@
 # секреты: реальные куки/прокси не коммитим (пример — *.example.txt — можно)
 tiktok_cookies.txt
 proxies.txt
+# env для systemd-сервиса (креды MinIO и т.п.) — пример .example коммитим
+config/detox.env
 
 # артефакты harness (volume_probe) и локальный state
 tiktok_probe*.csv

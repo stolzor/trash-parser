@@ -41,8 +41,8 @@ long_window_seconds = 30.0        # длина окна (синхр. с ml LONG_
 
 [discovery]
 max_hops = 1                # 0 = только seeds; >0 = расширять по каналам (анти-survivorship-bias)
-expand_channel_videos = 30  # сколько аплоадов брать с одного канала при расширении
-max_channels_per_hop = 50   # предел каналов за один хоп
+expand_channel_videos = 40  # сколько аплоадов брать с одного канала при расширении
+max_channels_per_hop = 80   # предел каналов за один хоп
 gate_before_media = true
 min_duration_s = 3.0
 
@@ -80,34 +80,180 @@ long = 500     # видео >90с
 # cookies_from_browser = "firefox"          # брать куки из браузера
 # cookies_file = "/path/to/cookies.txt"    # или Netscape cookies.txt
 
-# --- Источники (Stage 0). Балансируем оба домена и оба уровня вовлечённости. ---
+# ─────────────────────────────────────────────────────────────────────────────
+# Источники (Stage 0) под «Dopamine Index». Цель — не «хорошие видео», а
+# РЕПРЕЗЕНТАТИВНОСТЬ + РАЗНООБРАЗИЕ обоих полюсов, чтобы модель училась структуре
+# дофаминовости, а не теме/длине. YouTube-only (TikTok — внизу, под residential).
+#
+#   • high-dopamine (short): разные ТИПЫ стимуляции, не только "satisfying".
+#   • low-dopamine (long): опора на channel-сиды (полные ленты) + max_hops —
+#     берём и «обычные» видео канала, а не только залетевшие (анти-survivorship).
+#   • target щедрый: метаданные дёшевы (download=false), собираем вширь.
+# ─────────────────────────────────────────────────────────────────────────────
 
-# short-домен (high-dopamine)
+# ═══ HIGH-DOPAMINE (short, ≤90с) — YouTube Shorts, разные типы стимуляции ═══
 [[seeds]]
 platform = "youtube"
 kind = "query"
-value = "shorts satisfying"
+value = "oddly satisfying shorts"
 domain_hint = "short"
-target = 40
+target = 60
 
 [[seeds]]
-platform = "tiktok"
-kind = "hashtag"
-value = "fyp"
+platform = "youtube"
+kind = "query"
+value = "asmr shorts"
 domain_hint = "short"
-target = 40
+target = 60
 
-# long-домен (low-dopamine) — полные аплоады канала против survivorship bias
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "prank shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "funny fails shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "subway surfers gameplay shorts"   # «sludge/brainrot» — геймплей+история
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "mukbang shorts"
+domain_hint = "short"
+target = 50
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "gym motivation shorts"
+domain_hint = "short"
+target = 50
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "drama storytime shorts"
+domain_hint = "short"
+target = 50
+
+[[seeds]]
+platform = "youtube"
+kind = "hashtag"
+value = "shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "hashtag"
+value = "viral"
+domain_hint = "short"
+target = 50
+
+# ═══ LOW-DOPAMINE (long, >90с) — полные ленты каналов (анти-survivorship) ═══
+# Подкасты / глубокие разговоры
 [[seeds]]
 platform = "youtube"
 kind = "channel"
 value = "@lexfridman"
 domain_hint = "long"
-target = 20
+target = 40
 
+[[seeds]]
+platform = "youtube"
+kind = "channel"
+value = "@hubermanlab"
+domain_hint = "long"
+target = 40
+
+# Лекции / образование (длинный формат)
+[[seeds]]
+platform = "youtube"
+kind = "channel"
+value = "@mitocw"                          # MIT OpenCourseWare — полные лекции
+domain_hint = "long"
+target = 40
+
+[[seeds]]
+platform = "youtube"
+kind = "channel"
+value = "@YaleCourses"
+domain_hint = "long"
+target = 40
+
+[[seeds]]
+platform = "youtube"
+kind = "channel"
+value = "@veritasium"
+domain_hint = "long"
+target = 30
+
+[[seeds]]
+platform = "youtube"
+kind = "channel"
+value = "@3blue1brown"
+domain_hint = "long"
+target = 30
+
+[[seeds]]
+platform = "youtube"
+kind = "channel"
+value = "@Computerphile"
+domain_hint = "long"
+target = 30
+
+# Длинный формат через поиск (широкий охват вне конкретных каналов)
 [[seeds]]
 platform = "youtube"
 kind = "query"
 value = "full podcast episode interview"
 domain_hint = "long"
-target = 30
+target = 50
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "university lecture full"
+domain_hint = "long"
+target = 50
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "documentary full episode"
+domain_hint = "long"
+target = 40
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "conference keynote full talk"
+domain_hint = "long"
+target = 40
+
+# ═══ TikTok — раскомментировать, когда встанет rotating residential в [proxy] ═══
+# [[seeds]]
+# platform = "tiktok"
+# kind = "hashtag"
+# value = "fyp"
+# domain_hint = "short"
+# target = 60
+#
+# [[seeds]]
+# platform = "tiktok"
+# kind = "hashtag"
+# value = "satisfying"
+# domain_hint = "short"
+# target = 60

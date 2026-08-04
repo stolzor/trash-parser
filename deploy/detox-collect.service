@@ -1,0 +1,18 @@
+[Unit]
+Description=detox-parser: инкрементальный сбор (Dopamine Index, Bronze)
+# Ждём инфраструктуру (Postgres/MinIO в docker). Docker поднимается отдельно —
+# сервис просто мягко упадёт и повторится по таймеру, если БД ещё не готова.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# ⬇⬇⬇ ПРАВЬ ПОД СЕБЯ: абсолютный путь к репозиторию на сервере ⬇⬇⬇
+WorkingDirectory=%h/detox-parser
+# Секреты и env (YTDLP_BIN, креды MinIO) — из файла (см. config/detox.env.example)
+EnvironmentFile=%h/detox-parser/config/detox.env
+# Собранный release-бинарь (сначала: cargo build --release -p detox-parser-cli)
+ExecStart=%h/detox-parser/target/release/detox-parser run --config config/seeds.youtube.toml
+# Один прогон под throttle может идти часами — не рубим по таймауту
+TimeoutStartSec=infinity
+Nice=10
