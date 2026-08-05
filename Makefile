@@ -10,6 +10,9 @@ UNITS := detox-collect.service detox-collect.timer
 # Подгрузка env (креды MinIO, YTDLP_BIN) для ПРЯМЫХ запусков бинаря — сервис
 # берёт их через systemd EnvironmentFile, а ручной запуск должен сам.
 LOAD_ENV = set -a; [ -f config/detox.env ] && . ./config/detox.env; set +a;
+# Bronze-бакет и клиент mc (одноразовый контейнер в сети MinIO; dev-креды).
+BUCKET ?= detox-bronze
+MC := docker run --rm --network container:detox-minio -e MC_HOST_local=http://minioadmin:minioadmin@127.0.0.1:9000 minio/mc
 
 .DEFAULT_GOAL := help
 
@@ -46,6 +49,14 @@ infra-down:
 ## infra-logs: логи docker-инфраструктуры
 infra-logs:
 	docker compose logs -f
+
+## minio-du: размер Bronze-бакета + число объектов
+minio-du:
+	$(MC) du local/$(BUCKET)/
+
+## minio-ls: список объектов в Bronze-бакете
+minio-ls:
+	$(MC) ls --recursive local/$(BUCKET)/
 
 # ─── Разовые команды пайплайна ───────────────────────────────────────────────
 ## discover: Stage 0 — найти кандидатов по сидам (без harvest)
@@ -111,5 +122,5 @@ svc-status:
 logs:
 	journalctl --user -u detox-collect.service -f
 
-.PHONY: help build check test fmt infra-up infra-down infra-logs \
+.PHONY: help build check test fmt infra-up infra-down infra-logs minio-du minio-ls \
         discover run status env install uninstall start stop timers svc-status logs
