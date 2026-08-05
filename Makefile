@@ -87,9 +87,10 @@ uninstall:
 	@echo ">> linger оставлен (влияет на все user-сервисы). Убрать вручную:"
 	@echo ">>   loginctl disable-linger $$USER"
 
-## start: прогнать сбор прямо сейчас (разово, через сервис)
+## start: прогнать сбор прямо сейчас (в фоне; сервис oneshot идёт часами)
 start:
-	systemctl --user start detox-collect.service
+	systemctl --user start --no-block detox-collect.service
+	@echo ">> запущено в фоне. Лог: make logs | статус: make svc-status"
 
 ## stop: остановить текущий прогон сервиса
 stop:
