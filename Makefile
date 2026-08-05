@@ -7,6 +7,9 @@ BIN   := $(REPO)/target/release/detox-parser
 CONFIG ?= config/seeds.youtube.toml
 SYSTEMD_DIR := $(HOME)/.config/systemd/user
 UNITS := detox-collect.service detox-collect.timer
+# Подгрузка env (креды MinIO, YTDLP_BIN) для ПРЯМЫХ запусков бинаря — сервис
+# берёт их через systemd EnvironmentFile, а ручной запуск должен сам.
+LOAD_ENV = set -a; [ -f config/detox.env ] && . ./config/detox.env; set +a;
 
 .DEFAULT_GOAL := help
 
@@ -47,15 +50,15 @@ infra-logs:
 # ─── Разовые команды пайплайна ───────────────────────────────────────────────
 ## discover: Stage 0 — найти кандидатов по сидам (без harvest)
 discover: build
-	$(BIN) discover --config $(CONFIG)
+	@$(LOAD_ENV) $(BIN) discover --config $(CONFIG)
 
-## run: полный прогон discover→harvest→media один раз
+## run: полный прогон discover→harvest→media один раз (в фоне лучше make start)
 run: build
-	$(BIN) run --config $(CONFIG)
+	@$(LOAD_ENV) $(BIN) run --config $(CONFIG)
 
 ## status: сводка по стадиям из манифеста
 status: build
-	$(BIN) status --config $(CONFIG)
+	@$(LOAD_ENV) $(BIN) status --config $(CONFIG)
 
 # ─── systemd: длительный сбор по таймеру (user-сервис, без root) ──────────────
 ## env: создать config/detox.env из примера (если ещё нет)
