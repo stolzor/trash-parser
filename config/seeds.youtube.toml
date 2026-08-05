@@ -40,9 +40,9 @@ long_windows = 4                  # длинные видео качаем N о�
 long_window_seconds = 30.0        # длина окна (синхр. с ml LONG_WINDOW_SECONDS)
 
 [discovery]
-max_hops = 1                # 0 = только seeds; >0 = расширять по каналам (анти-survivorship-bias)
-expand_channel_videos = 40  # сколько аплоадов брать с одного канала при расширении
-max_channels_per_hop = 80   # предел каналов за один хоп
+max_hops = 2                # 0 = только seeds; >0 = расширять по каналам (анти-survivorship-bias)
+expand_channel_videos = 50  # сколько аплоадов брать с одного канала при расширении
+max_channels_per_hop = 100  # предел каналов за один хоп
 gate_before_media = true
 min_duration_s = 3.0
 
@@ -162,6 +162,41 @@ value = "viral"
 domain_hint = "short"
 target = 50
 
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "reaction shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "unboxing shorts"
+domain_hint = "short"
+target = 50
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "life hacks shorts"
+domain_hint = "short"
+target = 50
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "street food shorts"
+domain_hint = "short"
+target = 50
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "dance trend shorts"
+domain_hint = "short"
+target = 50
+
 # ═══ LOW-DOPAMINE (long, >90с) — полные ленты каналов (анти-survivorship) ═══
 # Подкасты / глубокие разговоры
 [[seeds]]
@@ -240,6 +275,41 @@ target = 40
 platform = "youtube"
 kind = "query"
 value = "conference keynote full talk"
+domain_hint = "long"
+target = 40
+
+[[seeds]]
+platform = "youtube"
+kind = "channel"
+value = "@TED"
+domain_hint = "long"
+target = 40
+
+[[seeds]]
+platform = "youtube"
+kind = "channel"
+value = "@kurzgesagt"
+domain_hint = "long"
+target = 30
+
+[[seeds]]
+platform = "youtube"
+kind = "channel"
+value = "@pbsspacetime"
+domain_hint = "long"
+target = 30
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "audiobook full unabridged"
+domain_hint = "long"
+target = 40
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "history documentary full length"
 domain_hint = "long"
 target = 40
 
