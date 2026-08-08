@@ -58,6 +58,14 @@ minio-du:
 minio-ls:
 	$(MC) ls --recursive local/$(BUCKET)/
 
+## media-estimate: оценить объём медиа (240p/360p) по собранным метаданным
+media-estimate:
+	@mkdir -p /tmp/detox-meta
+	@docker run --rm --network container:detox-minio \
+	  -e MC_HOST_local=http://minioadmin:minioadmin@127.0.0.1:9000 \
+	  -v /tmp/detox-meta:/data minio/mc cp --recursive local/$(BUCKET)/ /data/ >/dev/null
+	@python3 scripts/estimate_media.py /tmp/detox-meta 240 360
+
 # ─── Разовые команды пайплайна ───────────────────────────────────────────────
 ## discover: Stage 0 — найти кандидатов по сидам (без harvest)
 discover: build
@@ -123,4 +131,4 @@ logs:
 	journalctl --user -u detox-collect.service -f
 
 .PHONY: help build check test fmt infra-up infra-down infra-logs minio-du minio-ls \
-        discover run status env install uninstall start stop timers svc-status logs
+        media-estimate discover run status env install uninstall start stop timers svc-status logs
