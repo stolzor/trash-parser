@@ -197,6 +197,91 @@ value = "dance trend shorts"
 domain_hint = "short"
 target = 50
 
+# --- рост минорного класса: ещё типы high-dopamine short (ADR-0007, баланс 1:1) ---
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "cute pets shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "magic trick shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "makeup transformation shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "sports highlights shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "meme compilation shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "quick recipe shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "diy craft shorts"
+domain_hint = "short"
+target = 50
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "comedy skit shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "gaming clips shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "try not to laugh shorts"
+domain_hint = "short"
+target = 60
+
+[[seeds]]
+platform = "youtube"
+kind = "query"
+value = "science experiment shorts"
+domain_hint = "short"
+target = 50
+
+[[seeds]]
+platform = "youtube"
+kind = "hashtag"
+value = "shortsfeed"
+domain_hint = "short"
+target = 60
+
 # ═══ LOW-DOPAMINE (long, >90с) — полные ленты каналов (анти-survivorship) ═══
 # Подкасты / глубокие разговоры
 [[seeds]]
