@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# КОНФИГ ТОЛЬКО ДЛЯ MEDIA-СТАДИИ (скачивание видео на сервер B).
+#
+#   detox-parser media --config config/seeds.media.toml
+#
+# Запускается на сервере A (где парсер и Postgres). Читает задания из общего
+# манифеста (Postgres на A), качает медиа и кладёт в MinIO на сервере B.
+# Метаданные (raw/meta) НЕ трогаются — они уже на A. Сиды не нужны: media-стадия
+# не занимается discovery, берёт уже собранные видео со status_media='pending'.
+#
+# ⚠ Перед запуском: сначала `make media-estimate` — прикинь объём и реши, что
+#   качать (short целиком дёшев; long тяжёлый → окнами).
+# ─────────────────────────────────────────────────────────────────────────────
+
+out_root = "./data"
+
+[manifest]
+# Тот же Postgres, что и при сборе метаданных (на сервере A, docker :5433).
+url = "postgres://postgres:postgres@127.0.0.1:5433/detox"
+
+[storage]
+backend = "s3"
+[storage.s3]
+bucket = "detox-media"
+region = "us-east-1"
+# ⬇⬇⬇ ПРАВЬ: IP/hostname СЕРВЕРА B в локальной сети ⬇⬇⬇
+endpoint = "http://192.168.1.2:9000"   # MinIO на сервере B (deploy/docker-compose.media.yml)
+prefix = "media"
+path_style = true
+staging_dir = "./.staging"             # временный буфер на A (файл удаляется после заливки)
+# Креды MinIO сервера B — из env AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+# (dev: minioadmin/minioadmin — те же, что в config/detox.env).
+
+[media]
+download = true                        # ← media-стадия качает
+format = "worst[height<=360][ext=mp4]/worst[height<=360]/worst"  # ≤360p, mp4 приоритет
+max_filesize = "300M"                  # предохранитель от аномально больших файлов
+long_windows = 4                       # long качаем 4 окнами, а не целиком (экономит место)
+long_window_seconds = 30.0
+
+[quota]
+# Предел числа скачиваний по доменам (баланс + контроль объёма). Правь под B.
+short = 2000
+long = 2000
+
+[concurrency]
+media_workers = 2                      # параллельных скачиваний
+requests_per_sec = 2
+claim_batch = 50

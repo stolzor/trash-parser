@@ -79,6 +79,11 @@ discover: build
 run: build
 	@$(LOAD_ENV) $(BIN) run --config $(CONFIG)
 
+## media-run: только media-стадия → качать видео на сервер B (config/seeds.media.toml)
+# Долгая операция — запускай в tmux/nohup. Метаданные не трогает, читает манифест.
+media-run: build
+	@$(LOAD_ENV) $(BIN) media --config config/seeds.media.toml
+
 ## status: сводка по стадиям из манифеста
 status: build
 	@$(LOAD_ENV) $(BIN) status --config $(CONFIG)
@@ -135,4 +140,4 @@ logs:
 	journalctl --user -u detox-collect.service -f
 
 .PHONY: help build check test fmt infra-up infra-down infra-logs minio-du minio-ls \
-        media-estimate discover run status env install uninstall start stop timers svc-status logs
+        media-estimate media-run discover run status env install uninstall start stop timers svc-status logs

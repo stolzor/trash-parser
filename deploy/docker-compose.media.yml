@@ -1,0 +1,43 @@
+# MinIO под МЕДИА — поднимается на СЕРВЕРЕ B (где 500+ ГБ).
+# Метаданные остаются на сервере A (свой MinIO+Postgres), сюда льётся только
+# тяжёлое медиа. Парсер на A целится endpoint'ом на этот MinIO по LAN.
+#
+#   scp -r deploy config сервер-B:~/detox-media/    # перенести на B
+#   ssh сервер-B 'cd ~/detox-media && docker compose -f deploy/docker-compose.media.yml up -d'
+#
+# Порты слушаются на 0.0.0.0, чтобы сервер A дотянулся по локальной сети.
+services:
+  minio-media:
+    image: minio/minio
+    container_name: detox-minio-media
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"      # S3 API (сюда ходит парсер с сервера A)
+      - "9001:9001"      # веб-консоль
+    volumes:
+      - detox-media-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Одноразово создаёт бакет detox-media и выходит.
+  createbucket:
+    image: minio/mc
+    container_name: detox-media-createbucket
+    depends_on:
+      - minio-media
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio-media:9000 minioadmin minioadmin; do sleep 1; done;
+      mc mb --ignore-existing local/detox-media;
+      echo 'bucket detox-media готов';
+      "
+
+volumes:
+  detox-media-data:
