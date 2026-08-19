@@ -116,11 +116,18 @@ def main():
         if fn.endswith(".json")
     ]
 
+    # Стратегия окон (синхронно с [media] в seeds.media.toml): long качаем
+    # long_windows × long_window_seconds, а не целиком → объём кратно меньше.
+    long_windows = int(os.environ.get("LONG_WINDOWS", "4"))
+    window_sec = float(os.environ.get("WINDOW_SEC", "30"))
+    window_total = long_windows * window_sec  # сколько секунд берём с long-видео
+
     DOMAINS = ("short", "long", "unknown")
     # счётчики: общие и по доменам
     cnt = {d: 0 for d in DOMAINS}
     dur_sum = {d: 0.0 for d in DOMAINS}
-    totals = {d: {h: 0.0 for h in heights} for d in DOMAINS}
+    totals = {d: {h: 0.0 for h in heights} for d in DOMAINS}      # целиком
+    totals_win = {d: {h: 0.0 for h in heights} for d in DOMAINS}  # long окнами, short целиком
     src = {h: {"format": 0, "bitrate": 0, "none": 0} for h in heights}
 
     for path in files:
@@ -137,12 +144,18 @@ def main():
         cnt[dom] += 1
         if dur:
             dur_sum[dom] += dur
+        # доля видео, реально скачиваемая при оконной стратегии (только long)
+        if dom == "long" and dur and window_total < dur:
+            win_factor = window_total / dur
+        else:
+            win_factor = 1.0
         for h in heights:
             size, s = estimate(meta, h)
             if size is None:
                 src[h]["none"] += 1
             else:
                 totals[dom][h] += size
+                totals_win[dom][h] += size * win_factor
                 src[h][s] += 1
 
     gb = 1024.0 ** 3
@@ -158,14 +171,22 @@ def main():
     print(f"Всего видео (raw meta): {n}")
     print(f"Суммарная длительность: {total_dur / 3600:.1f} ч ({total_dur / 60:.0f} мин)")
     print()
-    print("Оценка объёма скачивания (видео+аудио), по доменам:")
+    print("[A] ЕСЛИ КАЧАТЬ ЦЕЛИКОМ (видео+аудио), по доменам:")
     for d in DOMAINS:
         if cnt[d]:
             print("  " + line(d, cnt[d], dur_sum[d], totals[d]))
-    # ИТОГО по всем доменам
     all_tot = {h: sum(totals[d][h] for d in DOMAINS) for h in heights}
     print("  " + "-" * 60)
     print("  " + line("ИТОГО", n, total_dur, all_tot))
+    print()
+    print(f"[B] РЕАЛЬНАЯ СТРАТЕГИЯ: long окнами ({long_windows}×{window_sec:.0f}с="
+          f"{window_total:.0f}с), short целиком:")
+    for d in DOMAINS:
+        if cnt[d]:
+            print("  " + line(d, cnt[d], dur_sum[d], totals_win[d]))
+    all_win = {h: sum(totals_win[d][h] for d in DOMAINS) for h in heights}
+    print("  " + "-" * 60)
+    print("  " + line("ИТОГО", n, total_dur, all_win))
     print()
     print("Источник оценки по высотам (format=точно / bitrate=прикидка / none=нет данных):")
     for h in heights:
@@ -173,7 +194,8 @@ def main():
         print(f"  {h:>4}p:  по формату {c['format']}, по битрейту {c['bitrate']}, нет данных {c['none']}")
     print()
     print("Прим.: где нет filesize — tbr×duration, где нет и его — типовой битрейт H.264.")
-    print("Реальный размер обычно в пределах ±20-30%. Домен: short ≤90с, long >90с.")
+    print("Реальный размер ±20-30%. Домен: short ≤90с, long >90с. Окна: env")
+    print("LONG_WINDOWS/WINDOW_SEC (по умолч. 4/30, как в config/seeds.media.toml).")
 
 
 if __name__ == "__main__":
