@@ -11,7 +11,9 @@ UNITS := detox-collect.service detox-collect.timer
 # берёт их через systemd EnvironmentFile, а ручной запуск должен сам.
 LOAD_ENV = set -a; [ -f config/detox.env ] && . ./config/detox.env; set +a;
 # Bronze-бакет и клиент mc (одноразовый контейнер в сети MinIO; dev-креды).
+# PREFIX синхронно с [storage.s3] prefix в конфиге (ключи вида <PREFIX>/raw/meta/…).
 BUCKET ?= detox-bronze
+PREFIX ?= bronze
 MC := docker run --rm --network container:detox-minio -e MC_HOST_local=http://minioadmin:minioadmin@127.0.0.1:9000 minio/mc
 
 .DEFAULT_GOAL := help
@@ -58,12 +60,14 @@ minio-du:
 minio-ls:
 	$(MC) ls --recursive local/$(BUCKET)/
 
-## media-estimate: оценить объём медиа (240p/360p) по собранным метаданным
+## media-estimate: оценить объём медиа (240p/360p) по метаданным (разбивка по доменам)
+# mirror вместо cp — инкрементально (качает только новые/изменённые объекты),
+# поэтому повторный запуск быстрый. Берём только raw/meta (formats+duration).
 media-estimate:
 	@mkdir -p /tmp/detox-meta
 	@docker run --rm --network container:detox-minio \
 	  -e MC_HOST_local=http://minioadmin:minioadmin@127.0.0.1:9000 \
-	  -v /tmp/detox-meta:/data minio/mc cp --recursive local/$(BUCKET)/ /data/ >/dev/null
+	  -v /tmp/detox-meta:/data minio/mc mirror --overwrite local/$(BUCKET)/$(PREFIX)/raw/meta/ /data/ >/dev/null
 	@python3 scripts/estimate_media.py /tmp/detox-meta 240 360
 
 # ─── Разовые команды пайплайна ───────────────────────────────────────────────

@@ -21,6 +21,16 @@ import sys
 # нет ни размера, ни tbr. Значения консервативные (реальность ±20-30%).
 FALLBACK_KBPS = {144: 120, 240: 320, 360: 650, 480: 1100, 720: 2500, 1080: 4500}
 
+# Порог домена — синхронно с crates/core/src/types.rs::SHORT_MAX_SECONDS.
+SHORT_MAX_SECONDS = 90.0
+
+
+def _domain(duration):
+    """short (≤90с) / long (>90с) / unknown — как Domain::for_duration в ядре."""
+    if duration is None:
+        return "unknown"
+    return "short" if duration <= SHORT_MAX_SECONDS else "long"
+
 
 def _num(x):
     return x if isinstance(x, (int, float)) and not isinstance(x, bool) else None
@@ -106,9 +116,11 @@ def main():
         if fn.endswith(".json")
     ]
 
-    n = n_dur = 0
-    total_dur = 0.0
-    totals = {h: 0.0 for h in heights}
+    DOMAINS = ("short", "long", "unknown")
+    # счётчики: общие и по доменам
+    cnt = {d: 0 for d in DOMAINS}
+    dur_sum = {d: 0.0 for d in DOMAINS}
+    totals = {d: {h: 0.0 for h in heights} for d in DOMAINS}
     src = {h: {"format": 0, "bitrate": 0, "none": 0} for h in heights}
 
     for path in files:
@@ -120,38 +132,48 @@ def main():
         # только сырой yt-dlp meta (есть duration/formats), не normalized (duration_s)
         if not isinstance(meta, dict) or ("formats" not in meta and "duration" not in meta):
             continue
-        n += 1
         dur = _num(meta.get("duration"))
+        dom = _domain(dur)
+        cnt[dom] += 1
         if dur:
-            n_dur += 1
-            total_dur += dur
+            dur_sum[dom] += dur
         for h in heights:
             size, s = estimate(meta, h)
             if size is None:
                 src[h]["none"] += 1
             else:
-                totals[h] += size
+                totals[dom][h] += size
                 src[h][s] += 1
 
     gb = 1024.0 ** 3
-    print(f"Видео (raw meta):       {n}")
-    print(f"  с длительностью:      {n_dur}")
+    n = sum(cnt.values())
+    total_dur = sum(dur_sum.values())
+
+    def line(label, c, dsum, tot):
+        parts = [f"{label:<8} видео={c:<5}  длит={dsum / 3600:6.1f}ч"]
+        for h in heights:
+            parts.append(f"{h}p ~{tot[h] / gb:6.2f}GB")
+        return "  ".join(parts)
+
+    print(f"Всего видео (raw meta): {n}")
     print(f"Суммарная длительность: {total_dur / 3600:.1f} ч ({total_dur / 60:.0f} мин)")
-    if n_dur:
-        print(f"Средняя длина:          {total_dur / n_dur:.0f} с")
     print()
-    print("Оценка объёма скачивания (видео+аудио):")
+    print("Оценка объёма скачивания (видео+аудио), по доменам:")
+    for d in DOMAINS:
+        if cnt[d]:
+            print("  " + line(d, cnt[d], dur_sum[d], totals[d]))
+    # ИТОГО по всем доменам
+    all_tot = {h: sum(totals[d][h] for d in DOMAINS) for h in heights}
+    print("  " + "-" * 60)
+    print("  " + line("ИТОГО", n, total_dur, all_tot))
+    print()
+    print("Источник оценки по высотам (format=точно / bitrate=прикидка / none=нет данных):")
     for h in heights:
-        vol_gb = totals[h] / gb
-        avg_mb = (totals[h] / n / (1024 * 1024)) if n else 0.0
         c = src[h]
-        print(
-            f"  {h:>4}p:  ~{vol_gb:6.2f} GB   (~{avg_mb:5.1f} MB/видео; "
-            f"по формату: {c['format']}, по битрейту: {c['bitrate']}, нет данных: {c['none']})"
-        )
+        print(f"  {h:>4}p:  по формату {c['format']}, по битрейту {c['bitrate']}, нет данных {c['none']}")
     print()
-    print("Прим.: оценка приблизительная. Где нет filesize — взят tbr×duration, где")
-    print("нет и его — типовой битрейт H.264. Реальный размер обычно в пределах ±20-30%.")
+    print("Прим.: где нет filesize — tbr×duration, где нет и его — типовой битрейт H.264.")
+    print("Реальный размер обычно в пределах ±20-30%. Домен: short ≤90с, long >90с.")
 
 
 if __name__ == "__main__":
